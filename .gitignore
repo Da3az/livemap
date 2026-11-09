@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+.env
+.env.local
+
+claude-plans/
+
+# Raw per-run output. The published numbers are committed as
+# loadtest/RESULTS.md.
+loadtest/results/
+
+spikes/shots/*.actual.png
