@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+    // No `paths` mapping into ../core/src: that pulls core's sources into this
+    // program and collides with `rootDir`. Resolution goes through the npm
+    // workspace symlink to @livemap/core's published `types` (its built
+    // dist/index.d.ts), so core must be built before renderer typechecks.
+  },
+  "include": ["src/**/*.ts"]
+}
