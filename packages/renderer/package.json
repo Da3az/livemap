@@ -1,0 +1,27 @@
+{
+  "name": "@livemap/renderer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MapLibre overlay renderer. Shared unchanged by the editor and the embeddable viewer.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --external:@livemap/core --outfile=dist/index.js --sourcemap && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@livemap/core": "0.1.0"
+  }
+}
