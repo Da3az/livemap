@@ -1,0 +1,22 @@
+{
+  "name": "@livemap/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Publish pipeline, repository seam and HTTP surface.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --packages=external --outfile=dist/index.js --sourcemap && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@livemap/core": "0.1.0",
+    "@fastify/rate-limit": "^11.2.2",
+    "fastify": "^5.12.8",
+    "pg": "^8.23.1",
+    "ws": "^8.23.0"
+  }
+}
