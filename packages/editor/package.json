@@ -1,0 +1,21 @@
+{
+  "name": "@livemap/editor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Map authoring application.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --external:@livemap/core --external:@livemap/renderer --external:maplibre-gl --outfile=dist/index.js --sourcemap && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@livemap/core": "0.1.0",
+    "@livemap/renderer": "0.1.0",
+    "terra-draw": "^1.39.0",
+    "terra-draw-maplibre-gl-adapter": "^1.5.0"
+  }
+}
