@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>livemap — demo</title>
+    <style>
+      :root {
+        --ink: #16130f;
+        --muted: #6b6257;
+        --line: #ddd5c9;
+        --bg: #f7f4ef;
+        --accent: #b2412f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+      header { border-block-end: 1px solid var(--line); padding-block-end: 24px; margin-block-end: 32px; }
+      h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); margin: 0; }
+      h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 40px 0 14px; font-weight: 600; }
+      .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+      a.card {
+        display: block; padding: 16px 18px; background: #fff; color: inherit;
+        border: 1px solid var(--line); border-radius: 10px; text-decoration: none;
+        transition: border-color .12s, transform .12s;
+      }
+      a.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+      a.card b { display: block; margin-block-end: 4px; }
+      a.card span { color: var(--muted); font-size: 13.5px; }
+      .stats { display: flex; flex-wrap: wrap; gap: 10px; margin-block-start: 18px; }
+      .stat { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+      .stat b { display: block; font-size: 20px; }
+      .stat span { color: var(--muted); font-size: 12.5px; }
+      .shots { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+      .shot { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      .shot img { width: 100%; display: block; background: #eae6df; }
+      .shot p { margin: 0; padding: 10px 14px; font-size: 13px; color: var(--muted); border-block-start: 1px solid var(--line); }
+      code { background: #efe9e0; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+      .note { background: #fff; border: 1px solid var(--line); border-inline-start: 3px solid var(--accent); border-radius: 8px; padding: 14px 18px; margin-block-start: 16px; }
+      .note p { margin: 0 0 8px; }
+      .note p:last-child { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>livemap</h1>
+        <p class="sub">
+          Authoring tool for interactive live-event maps. This demo runs the
+          real publish pipeline — the API publishes an immutable artifact, the
+          viewer fetches it from the public path. Nothing is mocked except the
+          database, which is in-memory.
+        </p>
+        <div class="stats">
+          <div class="stat"><b>220</b><span>unit tests</span></div>
+          <div class="stat"><b>6</b><span>feature kinds</span></div>
+          <div class="stat"><b>18</b><span>visual assertions</span></div>
+          <div class="stat"><b>6.6 KiB</b><span>core, min+gzip</span></div>
+          <div class="stat"><b>0</b><span>dependencies in core</span></div>
+        </div>
+      </header>
+
+      <h2>Editor</h2>
+      <div class="grid">
+        <a class="card" href="/editor.html?basemap=real">
+          <b>Open the editor</b>
+          <span>Draw areas, arrows, front lines, icons and annotations. Save, publish, preview.</span>
+        </a>
+        <a class="card" href="/editor.html">
+          <b>Editor, plain background</b>
+          <span>No basemap — just the annotation engine.</span>
+        </a>
+      </div>
+
+      <h2>Live viewer</h2>
+      <div class="grid">
+        <a class="card" href="/viewer.html">
+          <b>Plain background</b>
+          <span>The annotation engine on its own — no basemap noise.</span>
+        </a>
+        <a class="card" href="/viewer.html?basemap=real">
+          <b>Over a real basemap</b>
+          <span>OpenFreeMap tiles, Arabic labels where OSM has them.</span>
+        </a>
+        <a class="card" href="/viewer.html?poll=1&amp;basemap=real">
+          <b>With update polling</b>
+          <span>Polls <code>latest.json</code> every 5s with an ETag. Publish again and watch it pick it up.</span>
+        </a>
+        <a class="card" href="/embed.html">
+          <b>Embedded in an article</b>
+          <span>Sandboxed iframe, postMessage height protocol.</span>
+        </a>
+      </div>
+
+      <h2>The published artifacts</h2>
+      <div class="grid">
+        <a class="card" href="/public/t/demo-news/m/levant-tracker/latest.json">
+          <b>latest.json</b>
+          <span>The pointer readers poll. <code>max-age=5</code>, stale-while-revalidate.</span>
+        </a>
+        <a class="card" href="/public/t/demo-news/m/levant-tracker/v/1.json">
+          <b>v/1.json</b>
+          <span>The immutable version artifact. <code>max-age=31536000, immutable</code>.</span>
+        </a>
+        <a class="card" href="/api-demo.html">
+          <b>Drive the API</b>
+          <span>Edit, publish, roll back — watch versions and ETags change.</span>
+        </a>
+      </div>
+
+      <h2>Headless verification</h2>
+      <p class="sub" style="margin-block-end:16px">
+        Captured by <code>npm run spike</code>. The z6.2 view is the explicit
+        regression guard: an earlier prototype sized arrowheads in metres and
+        they ballooned to nearly the radius of the shrunken curves.
+      </p>
+      <div class="shots" id="shots"></div>
+
+      <div class="note">
+        <p><b>Not wired yet:</b> Postgres. The API runs on an in-memory repository behind the same interface, pending migration approval — so anything you draw is lost when the server restarts.</p>
+        <p><b>Not wired yet:</b> real auth. <code>AuthResolver</code> is a seam with a fixed demo actor; there is no login.</p>
+        <p><b>Known gaps:</b> icons do not de-conflict at low zoom, and labels avoid each other but not geometry.</p>
+      </div>
+    </div>
+
+    <script>
+      const shots = [
+        ["z9.2-authoring", "Authoring zoom. Front-line teeth, tangent arrowheads, chevrons, Arabic annotation with a dashed leader."],
+        ["z6.2-zoomed-out", "The regression view. Arrowheads stay proportionate; one label suppressed rather than overlapped."],
+        ["z4.5-far-out", "Far out. Teeth collapse to 1, icons hold constant screen size."],
+        ["z12-zoomed-in", "Zoomed in. 259 teeth; annotations suppressed because their anchors are off-viewport."],
+        ["z9.2-rotated-pitched", "Bearing 55°, pitch 50°. Arrowheads stay tangent via icon-rotation-alignment: map."],
+      ];
+      document.getElementById("shots").innerHTML = shots
+        .map(
+          ([name, caption]) =>
+            `<div class="shot"><a href="/shots/${name}.png"><img loading="lazy" src="/shots/${name}.png" alt="${caption}"></a><p>${caption}</p></div>`
+        )
+        .join("");
+    </script>
+  </body>
+</html>
