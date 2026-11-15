@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>livemap — API</title>
+    <style>
+      body { margin: 0; background: #f7f4ef; color: #16130f;
+             font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; }
+      .wrap { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .sub { color: #6b6257; margin: 0 0 24px; }
+      button { font: inherit; padding: 9px 16px; border: 1px solid #ddd5c9;
+               background: #fff; border-radius: 8px; cursor: pointer; margin: 0 8px 8px 0; }
+      button:hover { border-color: #b2412f; }
+      pre { background: #16130f; color: #e8e1d6; padding: 16px; border-radius: 10px;
+            overflow: auto; font: 12.5px/1.6 ui-monospace, Menlo, monospace; max-height: 460px; }
+      .back { font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <p class="back"><a href="/">← demo index</a></p>
+      <h1>Drive the API</h1>
+      <p class="sub">
+        Each action hits the real Fastify routes. Watch the version and ETag
+        move — and note that republishing unchanged content returns
+        <code>200 unchanged</code>, not a new version.
+      </p>
+      <div>
+        <button data-a="get">GET map</button>
+        <button data-a="add">Add an incident</button>
+        <button data-a="publish">Publish</button>
+        <button data-a="publish">Publish again (unchanged)</button>
+        <button data-a="pointer">GET latest.json</button>
+        <button data-a="rollback">Roll back to v1</button>
+      </div>
+      <pre id="out">ready</pre>
+    </div>
+    <script type="module">
+      const out = document.getElementById("out");
+      let rev = null;
+      const log = (label, status, body) => {
+        out.textContent =
+          `${label}\n${status}\n\n${JSON.stringify(body, null, 2)}\n\n` + out.textContent;
+      };
+      const call = async (label, url, init) => {
+        const r = await fetch(url, init);
+        let b; try { b = await r.json(); } catch { b = "(no body)"; }
+        log(label, `${r.status} ${r.statusText}`, b);
+        return b;
+      };
+      document.body.addEventListener("click", async (e) => {
+        const a = e.target.dataset?.a;
+        if (!a) return;
+        const H = { "content-type": "application/json" };
+        if (a === "get") {
+          const b = await call("GET /maps/m-1", "/maps/m-1");
+          rev = b.map?.rev ?? rev;
+        } else if (a === "add") {
+          if (rev === null) { const b = await call("GET /maps/m-1", "/maps/m-1"); rev = b.map.rev; }
+          const id = "incident-" + Math.random().toString(36).slice(2, 7);
+          const b = await call("POST /maps/m-1/edit", "/maps/m-1/edit", {
+            method: "POST", headers: H,
+            body: JSON.stringify({ rev, put: [{
+              id, kind: "point", at: "Z",
+              at_: [35.3 + Math.random() * 0.8, 31.7 + Math.random() * 0.7],
+              icon: "evt:strike", iconColor: "#E03C31", iconSize: 1 }] }),
+          });
+          if (typeof b.rev === "number") rev = b.rev;
+        } else if (a === "publish") {
+          await call("POST /maps/m-1/publish", "/maps/m-1/publish", { method: "POST", headers: H });
+        } else if (a === "pointer") {
+          await call("GET latest.json", "/public/t/demo-news/m/levant-tracker/latest.json");
+        } else if (a === "rollback") {
+          await call("POST /maps/m-1/rollback", "/maps/m-1/rollback", {
+            method: "POST", headers: H, body: JSON.stringify({ toVersion: 1 }) });
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>livemap — editor</title>
+    <link rel="stylesheet" href="/maplibre-gl.css" />
+    <link rel="stylesheet" href="/dist/editor.css" />
+  </head>
+  <body>
+    <div class="editor" dir="ltr">
+      <div class="toolbar"></div>
+      <div class="map"></div>
+      <aside class="panels">
+        <section class="panel">
+          <h2 class="panel-title">Inspector</h2>
+          <div class="inspector-body"></div>
+        </section>
+        <section class="panel">
+          <h2 class="panel-title">Features</h2>
+          <div class="feature-list"></div>
+        </section>
+      </aside>
+      <div class="status">starting…</div>
+    </div>
+    <script type="module" src="/dist/editor.js"></script>
+  </body>
+</html>

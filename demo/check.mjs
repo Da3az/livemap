@@ -1,0 +1,14 @@
+import { chromium } from "playwright-core";
+const exe = `${process.env.HOME}/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome`;
+const b = await chromium.launch({ executablePath: exe, args: ["--use-gl=swiftshader","--enable-unsafe-swiftshader","--no-sandbox","--disable-dev-shm-usage"] });
+const p = await b.newPage({ viewport: { width: 1100, height: 700 }, deviceScaleFactor: 2 });
+const errs = [];
+p.on("pageerror", e => errs.push("pageerror: " + e.message));
+p.on("console", m => { if (m.type() === "error") errs.push("console: " + m.text()); });
+await p.goto("http://127.0.0.1:8800/viewer.html", { waitUntil: "load" });
+await p.waitForTimeout(6000);
+const status = await p.textContent("#status");
+console.log("status bar:", status);
+await p.screenshot({ path: "demo/shots/demo-viewer.png" });
+console.log("errors:", errs.length ? errs.slice(0,5) : "none");
+await b.close();
