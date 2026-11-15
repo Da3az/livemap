@@ -1,0 +1,19 @@
+{
+  "name": "@livemap/viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Embeddable read-only map viewer. Reads published artifacts from a CDN; never touches the database.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --external:@livemap/core --external:@livemap/renderer --outfile=dist/index.js --sourcemap && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@livemap/core": "0.1.0",
+    "@livemap/renderer": "0.1.0"
+  }
+}
