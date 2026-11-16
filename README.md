@@ -11,7 +11,7 @@ the RTL handling is engineering rather than a stylesheet afterthought.
 ```bash
 npm install
 npm run db:up && npm run migrate   # postgis on 127.0.0.1:5460
-npm test                           # 248 tests
+npm test                           # 249 tests
 npm run loadtest                   # reproduces the numbers below (~8 min)
 ```
 
@@ -124,7 +124,7 @@ joins of connected scripts — Arabic, Persian, Urdu
 ```
 packages/core       domain model + annotation geometry. ZERO dependencies. 129 tests.
 packages/renderer   MapLibre overlay, shared unchanged by editor and viewer. 26 tests.
-packages/api        routes, publish pipeline, PostgresRepo, auth, WS hub. 73 tests.
+packages/api        routes, publish pipeline, PostgresRepo, auth, WS hub. 74 tests.
 packages/viewer     embeddable read-only viewer + ETag polling. 20 tests.
 packages/editor     the authoring application.
 
@@ -160,7 +160,7 @@ editor ──► api ──► MapRepo ──► Postgres          (write path)
 cp .env.example .env
 
 npm run build
-npm test                 # DB integration tests skip without DATABASE_URL
+npm test                 # 249 tests; DB integration tests skip without DATABASE_URL
 npm run spike            # headless render + 18 assertions → spikes/shots/
 npm run demo             # http://127.0.0.1:8800/
 
