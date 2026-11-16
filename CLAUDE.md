@@ -37,7 +37,7 @@ a commercial inconvenience.
 ```
 packages/core      domain model + annotation geometry. ZERO dependencies. 129 tests.
 packages/renderer  MapLibre overlay, shared unchanged by editor and viewer. 26 tests.
-packages/api       Fastify routes, publish pipeline, PostgresRepo, auth, WS hub. 73 tests.
+packages/api       Fastify routes, publish pipeline, PostgresRepo, auth, WS hub. 74 tests.
 packages/viewer    embeddable read-only viewer + ETag polling + iframe protocol. 20 tests.
 packages/editor    the authoring application.
 migrations/        0001_init.sql — applied. Schema + RLS policies.
@@ -50,7 +50,7 @@ demo/              local harness that boots all of it. `npm run demo`.
 
 ```bash
 npm run build      # all packages
-npm test           # 248 tests (DB integration tests skip without DATABASE_URL)
+npm test           # 249 tests (DB integration tests skip without DATABASE_URL)
 npm run spike      # headless render + 18 assertions + screenshots
 npm run demo       # http://127.0.0.1:8800/
 

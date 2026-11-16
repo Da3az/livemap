@@ -79,7 +79,10 @@ export function verifySession(
 export class TokenAuth implements AuthResolver {
   constructor(private readonly secret: string) {
     if (!secret || secret === "replace-me") {
-      throw new Error("SESSION_SECRET is unset or still the placeholder");
+      throw new Error(
+        "SESSION_SECRET is unset or still the placeholder from .env.example. " +
+          'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64url\'))"',
+      );
     }
   }
 
