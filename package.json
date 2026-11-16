@@ -11,8 +11,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @livemap/core && npm run build -w @livemap/renderer && npm run build -w @livemap/api && npm run build -w @livemap/viewer && npm run build -w @livemap/editor",
+    "typecheck": "npm run typecheck -w @livemap/core && npm run typecheck -w @livemap/renderer && npm run typecheck -w @livemap/api && npm run typecheck -w @livemap/viewer && npm run typecheck -w @livemap/editor",
     "test": "npm run test --workspaces --if-present",
     "spike": "node spikes/run.mjs",
     "demo": "node --import tsx demo/server.mjs",
