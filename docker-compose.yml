@@ -1,0 +1,33 @@
+name: livemap
+
+services:
+  db:
+    image: postgis/postgis:18-3.7
+    environment:
+      POSTGRES_DB: livemap
+      POSTGRES_USER: livemap_migrator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-livemap_dev}
+    # Bound to localhost only, on a port picked to avoid colliding with other
+    # local Postgres instances.
+    ports:
+      - "127.0.0.1:5460:5432"
+    # Postgres 18+ images store data in a major-version subdirectory, so the
+    # mount goes at /var/lib/postgresql, not .../data. Mounting the old path
+    # makes the entrypoint refuse to start.
+    volumes:
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livemap_migrator -d livemap"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    command:
+      - postgres
+      # Load-test headroom: the DB-per-request scenario is designed to exhaust
+      # connections, and we want that to show up as queueing rather than as
+      # connection refusals.
+      - -c
+      - max_connections=200
+
+volumes:
+  db_data:
