@@ -95,19 +95,10 @@ async function main() {
   );
 
   const store = new MemoryArtifactStore();
-  const app = buildServer({
-    repo,
-    store,
-    auth: new StaticAuth({
-      userId: "u-demo",
-      tenantId: "t-demo",
-      tenantSlug: "demo-news",
-      role: "editor",
-    }),
-  });
 
-  // Serve the demo pages for anything the API does not claim.
-  app.setNotFoundHandler(async (req, reply) => {
+  // Serve the demo pages for anything the API does not claim. Passed in rather
+  // than set afterwards: Fastify allows only one not-found handler per prefix.
+  const servePages = async (req, reply) => {
     const url = (req.url || "/").split("?")[0];
     if (url === "/favicon.ico") return reply.code(204).send();
     const rel = url === "/" ? "/index.html" : url;
@@ -120,6 +111,18 @@ async function main() {
     } catch {
       return reply.code(404).send({ error: "not_found" });
     }
+  };
+
+  const app = buildServer({
+    repo,
+    store,
+    auth: new StaticAuth({
+      userId: "u-demo",
+      tenantId: "t-demo",
+      tenantSlug: "demo-news",
+      role: "editor",
+    }),
+    notFound: servePages,
   });
 
   await app.listen({ port: PORT, host: "127.0.0.1" });

@@ -59,6 +59,28 @@ test("an unknown route returns a JSON 404, not an HTML error page", async () => 
   await app.close();
 });
 
+test("a caller can supply the not-found handler to serve static pages", async () => {
+  // Regression: Fastify allows one not-found handler per prefix, so when
+  // buildServer claimed it, demo/server.mjs could no longer serve its pages
+  // from the fallback and the whole demo failed to boot.
+  const app = buildServer(
+    deps({
+      notFound: async (req, reply) =>
+        reply.code(200).type("text/html").send(`<h1>page ${req.url}</h1>`),
+    }),
+  );
+
+  const res = await app.inject({ method: "GET", url: "/index.html" });
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /page \/index\.html/);
+
+  // Real routes still win over the fallback.
+  const api = await app.inject({ method: "GET", url: "/maps/nope" });
+  assert.equal(api.statusCode, 404);
+  assert.deepEqual(api.json(), { error: "not_found" });
+  await app.close();
+});
+
 test("a repository failure becomes a 500 with no internals leaked", async () => {
   const exploding: MapRepo = {
     getMap: async () => {
