@@ -3,6 +3,7 @@ import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
   type FastifyServerOptions,
+  type RouteHandlerMethod,
 } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import type { MapFeature } from "@livemap/core";
@@ -38,6 +39,12 @@ export interface ServerDeps {
   readonly bodyLimit?: number;
   /** Checked by GET /ready. Omit and readiness is just liveness. */
   readonly readiness?: () => Promise<boolean>;
+  /**
+   * Replaces the default JSON 404. Fastify allows only one per prefix, so a
+   * caller that wants to serve static pages from the fallback has to supply it
+   * here rather than calling `setNotFoundHandler` on the returned instance.
+   */
+  readonly notFound?: RouteHandlerMethod;
 }
 
 /** Roles allowed to mutate features. `viewer` is read-only. */
@@ -97,8 +104,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return reply.code(status).send({ error: err.code ?? "bad_request" });
   });
 
-  app.setNotFoundHandler((_req, reply) =>
-    reply.code(404).send({ error: "not_found" }),
+  app.setNotFoundHandler(
+    deps.notFound ?? ((_req, reply) => reply.code(404).send({ error: "not_found" })),
   );
 
   const actorOf = (req: FastifyRequest): Actor =>
