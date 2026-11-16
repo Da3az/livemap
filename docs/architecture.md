@@ -1,0 +1,231 @@
+# livemap — architecture
+
+**Status:** Phase 1. Core engine and renderer are built and verified; the API,
+editor and viewer are scaffolded. See `claude-plans/chat-livemap-foundation/task_plan.md`
+for what is and is not done.
+
+Every decision below traces to an entry in `claude-plans/decisions.md`, most of
+them backed by measurement rather than preference. Where a choice looks odd,
+check there before changing it.
+
+---
+
+## 1. The shape of the system
+
+```
+                    EDIT PATH                          READ PATH
+                    (authenticated, slow, stateful)    (anonymous, fast, cached)
+
+  ┌──────────┐                                   ┌──────────────┐
+  │  Editor  │──── REST ────┐                    │   Embedded   │
+  │   SPA    │              │                    │    viewer    │
+  └──────────┘              ▼                    └──────┬───────┘
+                      ┌──────────┐                      │
+                      │   API    │                      │ GET (ETag)
+                      │ Fastify  │                      ▼
+                      └────┬─────┘               ┌──────────────┐
+                           │                     │     CDN      │
+                    ┌──────┴──────┐              └──────┬───────┘
+                    ▼             ▼                     │
+             ┌────────────┐  ┌─────────┐                │
+             │  Postgres  │  │ Object  │◄───── publish ─┘
+             │  + PostGIS │  │ storage │
+             └────────────┘  └─────────┘
+```
+
+**The single most important property: the read path never touches the
+database.** Editors write to Postgres. Publishing renders an immutable
+versioned artifact to object storage behind a CDN. Readers only ever fetch
+from the CDN.
+
+This is not premature optimisation — it is the thing that makes a news traffic
+spike survivable. A map embedded in a story that goes viral serves from cache
+at zero marginal database cost, and an auto-refreshing reader surface polls a
+tiny pointer object with `If-None-Match` and collects 304s.
+
+## 2. Liveness: there is no realtime transport layer
+
+Measured, not assumed (`decisions.md`, 2026-11-06):
+
+- **AP's shared election data layer polls** — `setInterval(…, 12e4)` for the
+  default lane and `setInterval(…, 1e4)` for the opt-in fast lane, ETag-gated,
+  paused on `visibilitychange`. Zero WebSocket/EventSource. This is the layer
+  behind the BBC's and most US newsrooms' election maps.
+- **The BBC's live results page** serves `max-age=5,
+  stale-while-revalidate=30, stale-if-error=90`.
+- **Al Jazeera's "Live Tracker"** serves `max-age=86400` with static JPEGs.
+- **NICAR 2026, all 233 sessions:** zero mentions of websocket, SSE, live maps
+  or auto-refresh.
+
+So: **snapshot publish first, live-ingest-then-approve as the paid tier, and
+no WebSocket fan-out, ever.** If an auto-updating reader surface is needed, it
+polls the pointer. That removes most of the projected build complexity.
+
+### Two objects, two cache policies
+
+| Object | Path | Cache-Control | Why |
+|---|---|---|---|
+| Version artifact | `…/v/{n}.json` | `public, max-age=31536000, immutable` | Can never change under a reader |
+| Latest pointer | `…/latest.json` | `public, max-age=5, stale-while-revalidate=30, stale-if-error=90` | Tiny; this is what makes publishing visible |
+
+`buildVersion()` computes a content hash over the features, viewport, basemap,
+title and direction — **deliberately excluding `publishedAt` and
+`publishedBy`**, so republishing an unchanged map returns the same ETag and
+readers keep their cached copy.
+
+## 3. Packages
+
+| Package | Depends on | Purpose |
+|---|---|---|
+| `@livemap/core` | **nothing** | Domain model + annotation geometry. Pure, Node-testable. **6.6 KiB min+gzip.** |
+| `@livemap/renderer` | core, (MapLibre structurally) | Builds MapLibre sources/layers. Shared *unchanged* by editor and viewer. |
+| `@livemap/api` | core | Fastify + Postgres + publish pipeline. |
+| `@livemap/editor` | core, renderer | The authoring SPA. |
+| `@livemap/viewer` | core, renderer | The embeddable read-only viewer. |
+
+**`core` has zero dependencies on purpose.** The geodesy, spline and
+de-confliction code is ~700 lines; pulling in Turf would have added a
+dependency tree for functions we can write and test exactly. It also keeps the
+engine runnable in Node, which is what let 129 unit tests cover the geometry
+without a browser.
+
+**The editor and viewer share one renderer.** That is the only way to
+guarantee what an author sees is what a reader gets. The viewer differs solely
+in never calling `setFeatures`.
+
+## 4. The annotation engine
+
+This is the differentiator, and nothing off-the-shelf provides it. terra-draw,
+mapbox-gl-draw, maplibre-gl-terradraw, leaflet-geoman **and** maplibre-geoman
+were all source-grepped for `arrow|bezier|curve|lineOffset|leader|callout`.
+All five have nothing.
+
+### Everything view-dependent is recomputed per view
+
+The failure that shaped this design: the first prototype sized arrowheads and
+front-line teeth in **metres**, which looks correct at the authoring zoom and
+falls apart everywhere else — at z6.2 arrowheads were nearly the radius of the
+shrunken curves.
+
+So sizes are denominated in **pixels** and converted to metres for the current
+zoom on every rebuild:
+
+```
+arrowHeadPx(strokeWidth) ──► arrowHeadMetres(strokeWidth, lat, zoom) ──► trim length
+toothSpacingPx(width)    ──► toothSpacingMetres(width, lat, zoom)    ──► tooth count
+```
+
+Verified: tooth count goes 1 → 4 → 37 → 259 across z4.5 → z6.2 → z9.2 → z12,
+while the arrowhead stays visually constant.
+
+### Arrows
+
+Stored as **control points plus a curvature scalar**, not as rendered
+geometry. The curve is derived by a Catmull-Rom spline computed in Mercator
+world space (splining in raw lng/lat skews at high latitude), then unprojected.
+
+`curvature` scales the spline tangents, so **0 traces the straight polyline
+through the controls and 1 is full smoothing** — one continuous editor handle
+from straight to curved, with no mode switch.
+
+Two details that are easy to get wrong and both are tested:
+- The head bearing comes from the **smoothed** geometry. Taking it from the
+  control points puts the arrowhead visibly off-tangent on a curve.
+- The shaft is **trimmed back** by the head length, or the line shows through
+  a filled head. Trim is capped at 40% of the arrow so a low-zoom conversion
+  cannot annihilate the shaft.
+
+MapLibre wiring: `icon-rotate: bearing − 90` (the sprite points east),
+`icon-rotation-alignment: "map"` so camera rotation is free, and
+**`icon-ignore-placement: true`** — without it the collision engine silently
+drops arrowheads, and an arrow with no head is just a line.
+
+### Front lines
+
+No front-line symbol exists in any of ~10,000 permissively-licensed icons
+surveyed — correctly, because it is **line symbology with a facing side**, not
+a point icon. So it is generated: a base line plus one closed ring per tooth
+(triangle, tick or semicircle), emitted as real geometry that takes the
+feature's own colour and needs no sprite build.
+
+### Leader-lined annotations
+
+`AnnotationFeature.offset` is in **screen pixels**, not a geographic delta. A
+geographic offset changes its apparent distance at every zoom, which is why
+naive leader lines collapse when you zoom out.
+
+MapLibre's style spec cannot express a line between a geographic anchor and a
+screen-offset label, so the leader is emitted as a small GeoJSON source
+rebuilt per view. The alternative — a DOM/SVG overlay — desyncs during inertia
+and loses z-ordering against map layers.
+
+### Label de-confliction
+
+Having set `icon-ignore-placement` and `text-allow-overlap` so MapLibre never
+drops our authored marks, **we owe the user our own collision engine.**
+
+`deconflict()` is iterative relaxation with a deviation budget: labels are
+pushed apart along their minimum translation vector weighted by priority, but
+tethered to where the editor put them. Anything still colliding when the
+budget is exhausted is **suppressed rather than drawn as mush** — hiding a
+label is honest, overlapping text is not. It is deterministic (stable sort by
+priority then id) so labels do not jitter between frames.
+
+## 5. Arabic / RTL
+
+**The renderer problem is solved upstream.** MapLibre 6.9.0+ does native
+Arabic shaping and bidi; measured pixel-identical to the old ICU plugin (0 of
+336,000 pixels differ). We ship no RTL plugin.
+
+What we still own:
+- **Halo width is clamped to ≥ 1.01.** MapLibre issue #8949: a halo of 1px or
+  less is drawn per-glyph and cuts the joins of connected scripts, mangling
+  Arabic. `normaliseHaloWidth()` enforces it and there is a test.
+- **Labels resolve as `coalesce(name:ar, name:nonlatin, name)`.** Measured
+  coverage: Riyadh has `name:ar` on only 12% of features but Arabic `name` on
+  99% of roads. Dubai is the genuine problem case at ~20% by any route.
+- **Direction is explicit per text, with `auto` resolved by first-strong
+  character.** An editor may deliberately want Arabic laid out LTR beside a
+  latinised name, so an explicit `dir` always wins.
+- **The editor UI must be RTL from the first commit.** Retrofitting RTL into
+  an editor with no i18n is the single largest avoidable cost identified in
+  research — uMap's Arabic is 7% real despite looking 100% complete.
+
+## 6. Known gaps
+
+Stated plainly rather than discovered later:
+
+1. **Icons do not de-conflict.** Only labels do. At low zoom, event icons pile
+   up — visible in `spikes/shots/z6.2-zoomed-out.png`. Needs clustering or an
+   icon collision pass.
+2. **Labels do not avoid geometry**, only other labels and declared obstacles.
+   An annotation can sit on top of an arrow.
+3. **Area labels use the ring centroid**, which can fall outside a concave
+   region. Needs a pole-of-inaccessibility algorithm.
+4. **`zoomEpsilon` is accepted but not wired up.** A label-only fast path is
+   the obvious next optimisation; the option is reserved, and deliberately not
+   faked.
+5. **Offsets rotate with the camera.** Screen offsets are applied in unrotated
+   Mercator pixel space, so a rotated map rotates the label offset with it.
+   Correct for a map-anchored annotation, and news maps are near-always
+   north-up, but it is a choice rather than an accident.
+6. **No tile-performance measurement yet.** The PMTiles cold-start figure in
+   `findings.md` is still someone else's number.
+
+## 7. Build requirements worth knowing
+
+- **MapLibre 6.x ships its worker as a separate file.** `maplibre-gl-worker.mjs`
+  must be copied next to the output bundle; bundling does not inline it. If it
+  is missing the map renders **nothing**, and the only clue is a 404 plus
+  "Worker failed to load". Cost us a debugging cycle; now explicit in
+  `spikes/run.mjs`.
+- **MapLibre 6.x has no default export.** `import { Map } from "maplibre-gl"`.
+  There is also **no `setWorkerUrl`** in 6.16, despite third-party docs saying
+  v6 requires it.
+- **`*-sort-key` is a LAYOUT property**, not paint, for fill/line/symbol.
+  Putting it in `paint` makes MapLibre reject the entire layer.
+- Build with **ESM, not IIFE** — an IIFE build breaks MapLibre's
+  `import.meta.url` worker resolution.
+- `getCanvas().width` is **device** pixels; `clientWidth` is CSS pixels. Label
+  layout works in CSS pixels, so using the former makes the viewport 2× too
+  large at dpr 2.
