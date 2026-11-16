@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgis/postgis:18-3.7
+        env:
+          POSTGRES_DB: livemap
+          POSTGRES_USER: livemap_migrator
+          POSTGRES_PASSWORD: livemap_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U livemap_migrator -d livemap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://livemap_migrator:livemap_ci@127.0.0.1:5432/livemap
+      APP_DATABASE_URL: postgres://livemap_app:livemap_ci_app@127.0.0.1:5432/livemap
+      APP_DB_PASSWORD: livemap_ci_app
+      SESSION_SECRET: ci-only-secret-not-used-anywhere-else
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Migrate
+        run: node scripts/migrate.mjs up
+
+      - name: Migration is reversible
+        run: |
+          node scripts/migrate.mjs down
+          node scripts/migrate.mjs up
+          node scripts/migrate.mjs status
+
+      - name: Test
+        run: npm test
+
+  loadtest-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+
+    services:
+      db:
+        image: postgis/postgis:18-3.7
+        env:
+          POSTGRES_DB: livemap
+          POSTGRES_USER: livemap_migrator
+          POSTGRES_PASSWORD: livemap_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U livemap_migrator -d livemap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://livemap_migrator:livemap_ci@127.0.0.1:5432/livemap
+      APP_DATABASE_URL: postgres://livemap_app:livemap_ci_app@127.0.0.1:5432/livemap
+      APP_DB_PASSWORD: livemap_ci_app
+      SESSION_SECRET: ci-only-secret-not-used-anywhere-else
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: node scripts/migrate.mjs up
+      - run: node --import tsx bench/seed.mjs 100
+
+      - name: Start bench server
+        run: |
+          node --import tsx bench/server.mjs > /tmp/bench.log 2>&1 &
+          for _ in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:8801/health && break
+            sleep 1
+          done
+          cat /tmp/bench.log
+
+      # A short run only: this guards the scripts and the endpoints against
+      # rotting. The published numbers come from loadtest/sweep-all.sh on a
+      # quiet machine, because CI runners are too noisy to compare latency on.
+      - name: k6 smoke
+        run: |
+          MAP_ID=$(curl -fsS http://127.0.0.1:8801/bench/stats \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).mapId))')
+          mkdir -p loadtest/results
+          for mode in db artifact conditional; do
+            docker run --rm --network host --user "$(id -u):$(id -g)" \
+              -v "$PWD/loadtest:/scripts:ro" \
+              -v "$PWD/loadtest/results:/results" \
+              -e BASE_URL=http://127.0.0.1:8801 \
+              -e MAP_ID="$MAP_ID" -e MODE="$mode" -e VUS=20 -e DURATION=5s \
+              -e SUMMARY_OUT="/results/ci-$mode.json" \
+              grafana/k6:2.4.0 run --quiet /scripts/read-path.js
+          done
+          node loadtest/report.mjs loadtest/results
+
+      - name: The read path must not touch the database
+        run: |
+          # The whole architecture rests on this. Assert it rather than trust it:
+          # after serving the artifact scenarios, the pool must be untouched.
+          curl -fsS -X POST http://127.0.0.1:8801/bench/reset-counters > /dev/null
+          MAP_ID=$(curl -fsS http://127.0.0.1:8801/bench/stats \
+            | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).mapId))')
+          for _ in $(seq 1 50); do
+            curl -fsS "http://127.0.0.1:8801/bench/artifact/$MAP_ID" > /dev/null
+          done
+          curl -fsS http://127.0.0.1:8801/bench/stats | node -e '
+            let d="";
+            process.stdin.on("data",c=>d+=c).on("end",()=>{
+              const s=JSON.parse(d);
+              if (s.pool.total !== 0) {
+                console.error("read path opened "+s.pool.total+" db connections");
+                process.exit(1);
+              }
+              console.log("ok: "+s.counters.artifact+" artifact reads, 0 db connections");
+            });
+          '
