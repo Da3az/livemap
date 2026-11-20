@@ -19,6 +19,7 @@ const MIGRATIONS = join(HERE, "..", "migrations");
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const APP_DB_PASSWORD = process.env.APP_DB_PASSWORD;
+const ADMIN_DB_PASSWORD = process.env.ADMIN_DB_PASSWORD;
 
 if (!DATABASE_URL) {
   console.error("DATABASE_URL is not set. Copy .env.example to .env.");
@@ -58,11 +59,17 @@ async function up(client) {
     const sql = await readFile(join(MIGRATIONS, name), "utf8");
     process.stdout.write(`applying ${name} ... `);
 
-    // The migration reads this GUC to set the app role's password, so the
-    // credential never appears in a committed .sql file.
-    await client.query("select set_config('livemap.app_password', $1, false)", [
-      APP_DB_PASSWORD ?? "livemap_dev_app",
-    ]);
+    // The migrations read these GUCs to set the role passwords, so a credential
+    // never appears in a committed .sql file. Both are set for every migration
+    // because a file that does not need one simply ignores it.
+    await client.query(
+      `select set_config('livemap.app_password',   $1, false),
+              set_config('livemap.admin_password', $2, false)`,
+      [
+        APP_DB_PASSWORD ?? "livemap_dev_app",
+        ADMIN_DB_PASSWORD ?? "livemap_dev_admin",
+      ],
+    );
 
     try {
       await client.query(sql);
