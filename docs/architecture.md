@@ -211,6 +211,16 @@ Stated plainly rather than discovered later:
    north-up, but it is a choice rather than an accident.
 6. **No tile-performance measurement yet.** The PMTiles cold-start figure in
    `findings.md` is still someone else's number.
+7. **`AdminDb` has no operations on it.** It is pool wiring plus a connection
+   assertion. There is no identity provider, so there is no way to authenticate
+   a platform operator and no honest place to put a check above it. Scripts
+   still hold their own provisioning SQL; §8 has the role split.
+8. **No approval workflow.** `publish_requests` has policies — a contributor may
+   insert, a publishing role may decide — but nothing reads the table. The
+   `publish:request` capability is granted and currently leads nowhere.
+9. **Nothing writes `maps.created_by` from the application.** Row ownership is
+   enforced, but maps are only ever created by the admin path, so the `maps`
+   insert policy has no production call site yet.
 
 ## 7. Build requirements worth knowing
 
@@ -229,3 +239,97 @@ Stated plainly rather than discovered later:
 - `getCanvas().width` is **device** pixels; `clientWidth` is CSS pixels. Label
   layout works in CSS pixels, so using the former makes the viewport 2× too
   large at dpr 2.
+
+## 8. Tenant isolation and the role model
+
+Two layers, deliberately. The application layer produces good error messages;
+the database layer is what actually holds.
+
+### The actor context
+
+Every repo call takes a `RepoCtx` — `{ tenantId, userId, role }` — and
+`PostgresRepo.withCtx()` turns it into three transaction-local GUCs that the
+policies read:
+
+| GUC | Read by | Purpose |
+|---|---|---|
+| `app.tenant_id` | `livemap_current_tenant()` | Tenant isolation |
+| `app.user_id` | `livemap_current_user()` | Row ownership |
+| `app.role` | `livemap_current_role()` | Role claim from the session token |
+
+`set_config(..., local => true)` on all three. A plain `SET` persists on the
+pooled connection after release, which would hand the next request the previous
+caller's tenant **and** permissions.
+
+An unset or malformed GUC yields NULL, so every comparison against it is NULL
+and the row is excluded. **The failure mode is an empty result or a denied
+write, never a widened one.**
+
+### The role claim is not trusted on its own
+
+`app.role` comes from an HMAC-signed token, so a client cannot forge it — but a
+token outlives the membership it was minted from. A user demoted from `editor`
+to `viewer` keeps a valid editor token until it expires.
+
+So `livemap_granted_role()` returns the role only where a `memberships` row in
+this tenant still grants exactly that role. The effective role is the
+intersection of what the token says and what the database records, and is never
+wider than either.
+
+### Where authorisation lives
+
+| Layer | File | What it decides |
+|---|---|---|
+| Capability grid | `packages/api/src/authz.ts` | Which role holds which verb, and the clean 403 with a reason |
+| Policies | `migrations/0002_role_aware_rls.sql` | The same grid, as the backstop that holds when a route forgets to ask |
+
+The duplication is intentional and one-directional: `authz.ts` is a mirror, the
+policies are the authority. `test/authz.test.ts` pins the grid as literal data;
+`test/postgres.test.ts` proves the policies agree with it by going **around**
+the repo with raw SQL — driven through `applyEdit`, those tests would pass with
+every policy dropped, because `authz.ts` would have refused first.
+
+`map_versions` has a `select` and an `insert` policy and deliberately no
+`update` or `delete`: the ledger is append-only in the database, because readers
+hold immutable artifacts keyed by those rows.
+
+### Three roles in the cluster
+
+| Role | RLS | Owns tables | Used by |
+|---|---|---|---|
+| `livemap_app` | **applies** | no | the request path |
+| `livemap_admin` | BYPASSRLS | no | cross-tenant platform work (`AdminDb`) |
+| `livemap_migrator` | BYPASSRLS | yes | migrations only |
+
+Separating the middle one from the bottom one means a support query cannot run
+DDL, and revoking platform access does not revoke the ability to migrate.
+
+`PostgresRepo.assertRlsActive()` runs in `scripts/serve.mjs` before
+`listen()` and refuses to start unless, for every table, RLS is enabled, FORCE
+is set, at least one policy is attached, the connecting role does not own the
+table, and the connecting role does not have BYPASSRLS. Each of those
+misconfigurations otherwise starts cleanly and then serves other tenants' rows.
+
+### A publish is three transactions
+
+Not five, and not one:
+
+1. `loadForPublish` — doc, features and newest version from **one** snapshot,
+   so the ETag comparison cannot straddle a concurrent edit.
+2. `recordNextVersion` — allocates the version number and inserts the ledger row
+   together, serialised by `pg_advisory_xact_lock` on the map id. These were two
+   transactions, so two publishers could read the same `max(version)` and the
+   second collided on the primary key only *after* uploading its artifact.
+3. `setPublishedVersion` — must come after the artifact exists, or the `maps`
+   row points at bytes nobody can fetch.
+
+One transaction is impossible: step 3 waits on an object store that cannot join
+a Postgres transaction.
+
+The lock is an advisory lock rather than `select ... for update` on the maps row
+because, per the Postgres docs, `SELECT ... FOR UPDATE` applies the **UPDATE**
+policy's `USING` clause as well as the SELECT policy's — and a publishing role
+need not satisfy the maps update policy, since publishing writes the ledger, not
+the map. The same rule is why `applyEdit` reads the map with a plain `select`:
+under `FOR UPDATE`, a row an ownership policy refuses would come back empty and
+be reported as "no such map" instead of as forbidden.
