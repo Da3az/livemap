@@ -62,6 +62,12 @@ await admin.end();
 // RLS-scoped pool are both exercised by the seed itself.
 const repo = new PostgresRepo({ connectionString: APP_DATABASE_URL, max: 4 });
 
+// The repo context the policies read. The role has to match the membership
+// granted above: livemap_granted_role() honours the app.role GUC only where a
+// membership row in this tenant actually carries it, so a mismatch here denies
+// every write rather than silently widening one.
+const ctx = { tenantId, userId, role: "editor" };
+
 const stroke = { color: "#c1121f", width: 2, opacity: 1 };
 const labelStyle = {
   color: "#111111",
@@ -164,12 +170,16 @@ const BATCH = 100;
 let rev = 0;
 for (let i = 0; i < features.length; i += BATCH) {
   const slice = features.slice(i, i + BATCH);
-  const next = await repo.applyEdit(tenantId, mapId, rev, slice, []);
-  if (next === null) throw new Error(`seed write rejected at rev ${rev}`);
-  rev = next;
+  const out = await repo.applyEdit(ctx, mapId, rev, slice, []);
+  if (out.status !== "applied") {
+    throw new Error(
+      `seed write rejected at rev ${rev}: ${out.status}${out.reason ? ` — ${out.reason}` : ""}`,
+    );
+  }
+  rev = out.rev;
 }
 
-const readBack = await repo.listFeatures(tenantId, mapId);
+const readBack = await repo.listFeatures(ctx, mapId);
 await repo.close();
 
 const token = signSession(

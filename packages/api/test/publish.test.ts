@@ -40,17 +40,20 @@ function point(id: string, lng: number, color = "#E03C31"): PointFeature {
 
 function setup(features: MapFeature[] = [point("p1", 35.5)]) {
   const repo = new MemoryMapRepo();
-  repo.seed(DOC, features);
+  // createdBy matches CTX.userId, so the ownership rule is satisfied by default
+  // and these tests exercise the role grid rather than row ownership. The
+  // ownership cases are in server.test.ts, where the status code is the point.
+  repo.seed(DOC, features, { createdBy: "u-1" });
   const store = new MemoryArtifactStore();
   return { repo, store };
 }
 
+const CTX = { tenantId: TENANT, userId: "u-1", role: "editor" };
+
 const BASE = {
-  tenantId: TENANT,
+  ctx: CTX,
   tenantSlug: TENANT_SLUG,
   mapId: MAP_ID,
-  actorId: "u-1",
-  actorRole: "editor",
   now: () => "2026-11-07T10:00:00.000Z",
 };
 
@@ -141,8 +144,8 @@ describe("publishMap", () => {
     const { repo, store } = setup();
     await publishMap(repo, store, BASE);
 
-    const rev = (await repo.getMap(TENANT, MAP_ID))!.rev;
-    await repo.applyEdit(TENANT, MAP_ID, rev, [point("p2", 36)], []);
+    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
+    await repo.applyEdit(CTX, MAP_ID, rev, [point("p2", 36)], []);
 
     const out = await publishMap(repo, store, BASE);
     assert.equal(out.status, "published");
@@ -175,7 +178,7 @@ describe("publishMap", () => {
   test("bookkeeping records the published version", async () => {
     const { repo, store } = setup();
     await publishMap(repo, store, BASE);
-    assert.equal((await repo.getMap(TENANT, MAP_ID))!.publishedVersion, 1);
+    assert.equal((await repo.getMap(CTX, MAP_ID))!.publishedVersion, 1);
   });
 
   test("missing map is reported, not thrown", async () => {
@@ -190,7 +193,7 @@ describe("publish authorisation", () => {
     const { repo, store } = setup();
     const out = await publishMap(repo, store, {
       ...BASE,
-      actorRole: "contributor",
+      ctx: { ...CTX, role: "contributor" },
     });
     assert.equal(out.status, "forbidden");
     assert.equal(store.size, 0, "a forbidden publish still wrote objects");
@@ -198,21 +201,21 @@ describe("publish authorisation", () => {
 
   test("a viewer cannot publish", async () => {
     const { repo, store } = setup();
-    const out = await publishMap(repo, store, { ...BASE, actorRole: "viewer" });
+    const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role: "viewer" } });
     assert.equal(out.status, "forbidden");
   });
 
   for (const role of ["owner", "admin", "editor"]) {
     test(`${role} can publish`, async () => {
       const { repo, store } = setup();
-      const out = await publishMap(repo, store, { ...BASE, actorRole: role });
+      const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role } });
       assert.equal(out.status, "published");
     });
   }
 
   test("an unknown role is denied rather than allowed", async () => {
     const { repo, store } = setup();
-    const out = await publishMap(repo, store, { ...BASE, actorRole: "wizard" });
+    const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role: "wizard" } });
     assert.equal(out.status, "forbidden");
   });
 });
@@ -222,8 +225,8 @@ describe("rollback", () => {
     const { repo, store } = setup();
     await publishMap(repo, store, BASE);
 
-    const rev = (await repo.getMap(TENANT, MAP_ID))!.rev;
-    await repo.applyEdit(TENANT, MAP_ID, rev, [point("p2", 36)], []);
+    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
+    await repo.applyEdit(CTX, MAP_ID, rev, [point("p2", 36)], []);
     await publishMap(repo, store, BASE);
     assert.equal(repo.allVersions(TENANT, MAP_ID).length, 2);
 
@@ -253,7 +256,7 @@ describe("rollback", () => {
     await publishMap(repo, store, BASE);
     const out = await rollbackMap(repo, store, {
       ...BASE,
-      actorRole: "contributor",
+      ctx: { ...CTX, role: "contributor" },
       toVersion: 1,
     });
     assert.equal(out.status, "forbidden");
@@ -278,36 +281,36 @@ describe("orphan reconciliation", () => {
 describe("optimistic concurrency", () => {
   test("a stale writer loses instead of clobbering", async () => {
     const { repo } = setup();
-    const rev = (await repo.getMap(TENANT, MAP_ID))!.rev;
+    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
 
-    const first = await repo.applyEdit(TENANT, MAP_ID, rev, [point("a", 35)], []);
-    assert.equal(first, rev + 1);
+    const first = await repo.applyEdit(CTX, MAP_ID, rev, [point("a", 35)], []);
+    assert.deepEqual(first, { status: "applied", rev: rev + 1 });
 
     // Second writer still holds the old revision.
-    const second = await repo.applyEdit(TENANT, MAP_ID, rev, [point("b", 36)], []);
-    assert.equal(second, null, "stale write was accepted");
+    const second = await repo.applyEdit(CTX, MAP_ID, rev, [point("b", 36)], []);
+    assert.equal(second.status, "stale", "stale write was accepted");
 
-    const feats = await repo.listFeatures(TENANT, MAP_ID);
+    const feats = await repo.listFeatures(CTX, MAP_ID);
     assert.ok(feats.some((f) => f.id === "a"));
     assert.ok(!feats.some((f) => f.id === "b"), "stale write landed anyway");
   });
 
   test("a writer that re-reads succeeds", async () => {
     const { repo } = setup();
-    const rev1 = (await repo.getMap(TENANT, MAP_ID))!.rev;
-    await repo.applyEdit(TENANT, MAP_ID, rev1, [point("a", 35)], []);
+    const rev1 = (await repo.getMap(CTX, MAP_ID))!.rev;
+    await repo.applyEdit(CTX, MAP_ID, rev1, [point("a", 35)], []);
 
-    const rev2 = (await repo.getMap(TENANT, MAP_ID))!.rev;
-    const ok = await repo.applyEdit(TENANT, MAP_ID, rev2, [point("b", 36)], []);
-    assert.equal(ok, rev2 + 1);
+    const rev2 = (await repo.getMap(CTX, MAP_ID))!.rev;
+    const ok = await repo.applyEdit(CTX, MAP_ID, rev2, [point("b", 36)], []);
+    assert.deepEqual(ok, { status: "applied", rev: rev2 + 1 });
   });
 
   test("deletes are applied before puts within one edit", async () => {
     const { repo } = setup([point("p1", 35)]);
-    const rev = (await repo.getMap(TENANT, MAP_ID))!.rev;
+    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
     // Re-creating the same id in the same transaction must keep the new value.
-    await repo.applyEdit(TENANT, MAP_ID, rev, [point("p1", 99)], ["p1"]);
-    const feats = (await repo.listFeatures(TENANT, MAP_ID)) as PointFeature[];
+    await repo.applyEdit(CTX, MAP_ID, rev, [point("p1", 99)], ["p1"]);
+    const feats = (await repo.listFeatures(CTX, MAP_ID)) as PointFeature[];
     assert.equal(feats.length, 1);
     assert.equal(feats[0]!.at_[0], 99);
   });

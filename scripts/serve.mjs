@@ -31,6 +31,18 @@ const repo = new PostgresRepo({
 // ArtifactStore implementation and no change above it.
 const store = new MemoryArtifactStore();
 
+// Prove the isolation before accepting a single request. Every policy could be
+// missing — a migration applied without the policy block, a connection string
+// pointing at a bypassrls role — and nothing else in this process would notice;
+// the server would start and serve other tenants' rows. Refuse to start instead.
+try {
+  await repo.assertRlsActive();
+} catch (err) {
+  console.error(`refusing to start: ${err.message}`);
+  await repo.close();
+  process.exit(1);
+}
+
 const app = buildServer({
   repo,
   store,

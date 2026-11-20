@@ -7,15 +7,19 @@ import Fastify, {
 } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import type { MapFeature } from "@livemap/core";
-import type { MapRepo } from "./repo.js";
+import type { MapRepo, RepoCtx } from "./repo.js";
 import type { ArtifactStore } from "./storage.js";
 import { publishMap, rollbackMap } from "./publish.js";
+import { can } from "./authz.js";
 
-export interface Actor {
-  readonly userId: string;
-  readonly tenantId: string;
+/**
+ * Extends RepoCtx rather than restating it, so an actor is directly usable as
+ * a repo context. That is what lets every handler pass `actor` straight down
+ * and have app.tenant_id, app.user_id and app.role all get set — the GUCs the
+ * policies in migrations/0002_role_aware_rls.sql read.
+ */
+export interface Actor extends RepoCtx {
   readonly tenantSlug: string;
-  readonly role: string;
 }
 
 export interface AuthResolver {
@@ -46,9 +50,6 @@ export interface ServerDeps {
    */
   readonly notFound?: RouteHandlerMethod;
 }
-
-/** Roles allowed to mutate features. `viewer` is read-only. */
-const EDITING_ROLES = new Set(["owner", "admin", "editor", "contributor"]);
 
 /** Reachable without a token: probes must work before auth is configured. */
 const PUBLIC_PATHS = new Set(["/health", "/ready"]);
@@ -143,12 +144,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       "/maps/:mapId",
       async (req, reply) => {
         const actor = actorOf(req);
-        const doc = await deps.repo.getMap(actor.tenantId, req.params.mapId);
+        const doc = await deps.repo.getMap(actor, req.params.mapId);
         if (!doc) return reply.code(404).send({ error: "not_found" });
-        const features = await deps.repo.listFeatures(
-          actor.tenantId,
-          req.params.mapId,
-        );
+        const features = await deps.repo.listFeatures(actor, req.params.mapId);
         return { map: doc, features };
       },
     );
@@ -158,7 +156,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       Body: { rev?: number; put?: MapFeature[]; delete?: string[] };
     }>("/maps/:mapId/edit", writeLimit, async (req, reply) => {
       const actor = actorOf(req);
-      if (!EDITING_ROLES.has(actor.role)) {
+
+      // The cheap half of the decision, before the body is even looked at. The
+      // other half needs the map row — whether a contributor owns it — and so
+      // happens inside `applyEdit`, against the row it already holds.
+      if (!can(actor.role, "map:edit")) {
         return reply.code(403).send({ error: "forbidden" });
       }
 
@@ -169,19 +171,26 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         return reply.code(400).send({ error: "rev_required" });
       }
 
-      const nextRev = await deps.repo.applyEdit(
-        actor.tenantId,
+      const out = await deps.repo.applyEdit(
+        actor,
         req.params.mapId,
         body.rev,
         body.put ?? [],
         body.delete ?? [],
       );
 
-      if (nextRev === null) {
-        // 409, not 500: the client should re-read and retry.
-        return reply.code(409).send({ error: "stale_revision" });
+      switch (out.status) {
+        case "applied":
+          return { rev: out.rev };
+        case "stale":
+          // 409, not 500: the client should re-read and retry.
+          return reply.code(409).send({ error: "stale_revision" });
+        case "not_found":
+          return reply.code(404).send({ error: "not_found" });
+        case "forbidden":
+          // Distinct from 409 on purpose: retrying will never help.
+          return reply.code(403).send({ error: "forbidden", reason: out.reason });
       }
-      return { rev: nextRev };
     });
 
     scope.post<{ Params: { mapId: string } }>(
@@ -190,11 +199,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       async (req, reply) => {
         const actor = actorOf(req);
         const out = await publishMap(deps.repo, deps.store, {
-          tenantId: actor.tenantId,
+          ctx: actor,
           tenantSlug: actor.tenantSlug,
           mapId: req.params.mapId,
-          actorId: actor.userId,
-          actorRole: actor.role,
         });
 
         switch (out.status) {
@@ -230,11 +237,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         }
 
         const out = await rollbackMap(deps.repo, deps.store, {
-          tenantId: actor.tenantId,
+          ctx: actor,
           tenantSlug: actor.tenantSlug,
           mapId: req.params.mapId,
-          actorId: actor.userId,
-          actorRole: actor.role,
           toVersion,
         });
 

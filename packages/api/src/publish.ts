@@ -8,7 +8,8 @@ import {
 } from "@livemap/core";
 import type { ArtifactStore } from "./storage.js";
 import { keys } from "./storage.js";
-import type { MapRepo, VersionRecord } from "./repo.js";
+import { authorizePublish } from "./authz.js";
+import type { MapRepo, RepoCtx, VersionDraft, VersionRecord } from "./repo.js";
 
 export type PublishOutcome =
   | { readonly status: "published"; readonly version: MapVersion }
@@ -17,96 +18,110 @@ export type PublishOutcome =
   | { readonly status: "forbidden"; readonly reason: string };
 
 export interface PublishInput {
-  readonly tenantId: string;
+  readonly ctx: RepoCtx;
   readonly tenantSlug: string;
   readonly mapId: string;
-  readonly actorId: string;
-  /** Roles permitted to publish; `contributor` is not one of them. */
-  readonly actorRole: string;
   /** Override the clock, for deterministic tests. */
   readonly now?: () => string;
 }
 
-const PUBLISHING_ROLES = new Set(["owner", "admin", "editor"]);
-
 /**
- * Step order is the correctness argument: the database and object storage are
- * not one transaction, so the pointer is written last. Pointer first would
- * briefly advertise an artifact that does not exist; any interruption before
- * it leaves readers on the previous version.
+ * Step order is the correctness argument on two axes.
+ *
+ * Across systems: the database and object storage are not one transaction, so
+ * the pointer is written last. Pointer first would briefly advertise an
+ * artifact that does not exist; any interruption before it leaves readers on
+ * the previous version, which is always a valid map.
+ *
+ * Within the database: this is THREE transactions, not five and not one.
+ *   1. `loadForPublish` — doc, features and the newest version from one
+ *      snapshot, so the etag comparison cannot straddle a concurrent edit.
+ *   2. `recordNextVersion` — allocate the version number and insert the ledger
+ *      row together, serialised against other publishers of this map.
+ *   3. `setPublishedVersion` — must come after the artifact exists, or the maps
+ *      row would point at bytes nobody can fetch.
+ *
+ * One transaction is impossible: step 3 has to wait for an object store that
+ * cannot join a Postgres transaction. Two would mean advancing
+ * `published_version` before the artifact is written.
  */
 export async function publishMap(
   repo: MapRepo,
   store: ArtifactStore,
   input: PublishInput,
 ): Promise<PublishOutcome> {
-  if (!PUBLISHING_ROLES.has(input.actorRole)) {
-    return {
-      status: "forbidden",
-      reason: `role "${input.actorRole}" cannot publish; submit for review instead`,
-    };
+  const decision = authorizePublish(input.ctx);
+  if (!decision.allowed) {
+    return { status: "forbidden", reason: decision.reason! };
   }
 
-  const doc = await repo.getMap(input.tenantId, input.mapId);
-  if (!doc) return { status: "not_found" };
-
-  const features = await repo.listFeatures(input.tenantId, input.mapId);
-  const latest = await repo.getLatestVersion(input.tenantId, input.mapId);
+  // 1 — one consistent read
+  const snapshot = await repo.loadForPublish(input.ctx, input.mapId);
+  if (!snapshot) return { status: "not_found" };
+  const { doc, features, latest } = snapshot;
 
   // `buildVersion` keeps version/publishedAt/publishedBy out of the hash, so
-  // the etag comparison below is about content only.
-  const nextVersion = await repo.nextVersion(input.tenantId, input.mapId);
-  const built = buildVersion({
+  // the etag is a pure function of the content. That is what lets us compare
+  // etags here, before a version number has been allocated: whatever number
+  // step 2 hands back, the etag is the same.
+  const candidate = buildVersion({
     doc,
     features,
-    version: nextVersion,
-    publishedBy: input.actorId,
+    version: (latest?.version ?? 0) + 1,
+    publishedBy: input.ctx.userId,
     ...(input.now ? { publishedAt: input.now() } : {}),
   });
 
   // No new version for unchanged content; readers would re-download an
   // identical map and lose a warm cache.
-  if (latest && latest.etag === built.etag) {
+  if (latest && latest.etag === candidate.etag) {
     return { status: "unchanged", version: latest.version, etag: latest.etag };
   }
 
-  const body = canonicalJson(built);
-  const versionKey = keys.version(input.tenantSlug, doc.slug, built.version);
-  const pointerKey = keys.pointer(input.tenantSlug, doc.slug);
+  // 2 — ledger. The callback runs inside the allocating transaction, because
+  // the storage key and the byte count both depend on the number it assigns.
+  let built = candidate;
+  let body = canonicalJson(candidate);
 
-  const record: VersionRecord = {
-    mapId: doc.id,
-    version: built.version,
-    etag: built.etag,
-    storageKey: versionKey,
-    byteSize: Buffer.byteLength(body, "utf8"),
-    featureCount: built.features.length,
-    publishedAt: built.publishedAt,
-    publishedBy: built.publishedBy,
-  };
+  const record = await repo.recordNextVersion(input.ctx, input.mapId, (version) => {
+    built = { ...candidate, version };
+    body = canonicalJson(built);
+    return {
+      etag: built.etag,
+      storageKey: keys.version(input.tenantSlug, doc.slug, version),
+      byteSize: Buffer.byteLength(body, "utf8"),
+      featureCount: built.features.length,
+      publishedAt: built.publishedAt,
+      publishedBy: built.publishedBy,
+    } satisfies VersionDraft;
+  });
 
-  // 1 — ledger
-  await repo.recordVersion(input.tenantId, record);
+  // The map was archived or deleted between the read and the allocation.
+  if (!record) return { status: "not_found" };
 
-  // 2 — immutable artifact
+  // 3 — immutable artifact
   const vPolicy = versionedCachePolicy(built.etag);
-  await store.put(versionKey, body, {
+  await store.put(record.storageKey, body, {
     contentType: "application/json; charset=utf-8",
     cacheControl: vPolicy.cacheControl,
     etag: vPolicy.etag,
   });
 
-  // 3 — pointer. The map goes live at this line and not before.
+  // 4 — pointer. The map goes live at this line and not before.
   const pointer = pointerFor(built);
   const pPolicy = pointerCachePolicy(built.etag);
-  await store.put(pointerKey, canonicalJson(pointer), {
-    contentType: "application/json; charset=utf-8",
-    cacheControl: pPolicy.cacheControl,
-    etag: pPolicy.etag,
-  });
+  await store.put(
+    keys.pointer(input.tenantSlug, doc.slug),
+    canonicalJson(pointer),
+    {
+      contentType: "application/json; charset=utf-8",
+      cacheControl: pPolicy.cacheControl,
+      etag: pPolicy.etag,
+    },
+  );
 
-  // 4 — bookkeeping
-  await repo.setPublishedVersion(input.tenantId, doc.id, built.version);
+  // 5 — bookkeeping
+  await repo.setPublishedVersion(input.ctx, doc.id, built.version);
 
   return { status: "published", version: built };
 }
@@ -117,14 +132,12 @@ export async function rollbackMap(
   store: ArtifactStore,
   input: PublishInput & { readonly toVersion: number },
 ): Promise<PublishOutcome> {
-  if (!PUBLISHING_ROLES.has(input.actorRole)) {
-    return {
-      status: "forbidden",
-      reason: `role "${input.actorRole}" cannot publish`,
-    };
+  const decision = authorizePublish(input.ctx);
+  if (!decision.allowed) {
+    return { status: "forbidden", reason: decision.reason! };
   }
 
-  const doc = await repo.getMap(input.tenantId, input.mapId);
+  const doc = await repo.getMap(input.ctx, input.mapId);
   if (!doc) return { status: "not_found" };
 
   const sourceKey = keys.version(input.tenantSlug, doc.slug, input.toVersion);
@@ -132,45 +145,50 @@ export async function rollbackMap(
   if (!source) return { status: "not_found" };
 
   const previous = JSON.parse(source.body) as MapVersion;
-  const nextVersion = await repo.nextVersion(input.tenantId, input.mapId);
 
-  const republished: MapVersion = {
-    ...previous,
-    version: nextVersion,
-    publishedAt: input.now ? input.now() : new Date().toISOString(),
-    publishedBy: input.actorId,
-  };
+  let republished: MapVersion = previous;
+  let body = canonicalJson(previous);
 
-  const body = canonicalJson(republished);
-  const versionKey = keys.version(input.tenantSlug, doc.slug, nextVersion);
-
-  await repo.recordVersion(input.tenantId, {
-    mapId: doc.id,
-    version: nextVersion,
-    // Same content, same ETag, so a reader holding the old bytes gets a 304.
-    etag: previous.etag,
-    storageKey: versionKey,
-    byteSize: Buffer.byteLength(body, "utf8"),
-    featureCount: republished.features.length,
-    publishedAt: republished.publishedAt,
-    publishedBy: republished.publishedBy,
+  const record = await repo.recordNextVersion(input.ctx, input.mapId, (version) => {
+    republished = {
+      ...previous,
+      version,
+      publishedAt: input.now ? input.now() : new Date().toISOString(),
+      publishedBy: input.ctx.userId,
+    };
+    body = canonicalJson(republished);
+    return {
+      // Same content, same ETag, so a reader holding the old bytes gets a 304.
+      etag: previous.etag,
+      storageKey: keys.version(input.tenantSlug, doc.slug, version),
+      byteSize: Buffer.byteLength(body, "utf8"),
+      featureCount: republished.features.length,
+      publishedAt: republished.publishedAt,
+      publishedBy: republished.publishedBy,
+    } satisfies VersionDraft;
   });
 
+  if (!record) return { status: "not_found" };
+
   const vPolicy = versionedCachePolicy(previous.etag);
-  await store.put(versionKey, body, {
+  await store.put(record.storageKey, body, {
     contentType: "application/json; charset=utf-8",
     cacheControl: vPolicy.cacheControl,
     etag: vPolicy.etag,
   });
 
   const pPolicy = pointerCachePolicy(previous.etag);
-  await store.put(keys.pointer(input.tenantSlug, doc.slug), canonicalJson(pointerFor(republished)), {
-    contentType: "application/json; charset=utf-8",
-    cacheControl: pPolicy.cacheControl,
-    etag: pPolicy.etag,
-  });
+  await store.put(
+    keys.pointer(input.tenantSlug, doc.slug),
+    canonicalJson(pointerFor(republished)),
+    {
+      contentType: "application/json; charset=utf-8",
+      cacheControl: pPolicy.cacheControl,
+      etag: pPolicy.etag,
+    },
+  );
 
-  await repo.setPublishedVersion(input.tenantId, doc.id, nextVersion);
+  await repo.setPublishedVersion(input.ctx, doc.id, record.version);
 
   return { status: "published", version: republished };
 }

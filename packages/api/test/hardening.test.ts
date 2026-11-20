@@ -87,10 +87,10 @@ test("a repository failure becomes a 500 with no internals leaked", async () => 
       throw new Error("connection to 10.0.0.5:5432 refused for user livemap_app");
     },
     listFeatures: async () => [],
-    applyEdit: async () => null,
-    nextVersion: async () => 1,
+    applyEdit: async () => ({ status: "not_found" }),
+    loadForPublish: async () => null,
+    recordNextVersion: async () => null,
     getLatestVersion: async () => null,
-    recordVersion: async () => {},
     setPublishedVersion: async () => {},
   };
 
@@ -113,10 +113,10 @@ test("an inbound x-request-id is honoured so a trace survives a proxy", async ()
   const app = buildServer(deps({ repo: {
     getMap: async () => { throw new Error("boom"); },
     listFeatures: async () => [],
-    applyEdit: async () => null,
-    nextVersion: async () => 1,
+    applyEdit: async () => ({ status: "not_found" }),
+    loadForPublish: async () => null,
+    recordNextVersion: async () => null,
     getLatestVersion: async () => null,
-    recordVersion: async () => {},
     setPublishedVersion: async () => {},
   } as MapRepo }));
 

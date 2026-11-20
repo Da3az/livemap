@@ -34,9 +34,16 @@ function point(id: string, lng: number): PointFeature {
   };
 }
 
-function setup(role = "editor", actor?: Actor | null) {
+function setup(
+  role = "editor",
+  actor?: Actor | null,
+  createdBy = "u-1",
+) {
   const repo = new MemoryMapRepo();
-  repo.seed(DOC, [point("p1", 35.5)]);
+  // The acting user owns the map by default, so a test that is about the role
+  // grid is not silently also a test about row ownership. Pass a different
+  // createdBy to exercise the ownership rule.
+  repo.seed(DOC, [point("p1", 35.5)], { createdBy });
   const store = new MemoryArtifactStore();
   const resolved: Actor | null =
     actor === undefined
@@ -150,7 +157,7 @@ describe("POST /maps/:id/edit", () => {
     await app.close();
   });
 
-  test("a contributor CAN edit", async () => {
+  test("a contributor CAN edit a map it created", async () => {
     const { app } = setup("contributor");
     const res = await app.inject({
       method: "POST",
@@ -158,6 +165,54 @@ describe("POST /maps/:id/edit", () => {
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 200);
+    await app.close();
+  });
+
+  // The whole reason applyEdit returns a status union rather than a nullable
+  // revision: an ownership refusal used to be indistinguishable from a lost
+  // race, so it surfaced as 409 and told the client to retry forever.
+  test("a contributor editing someone else's map is 403, not 409", async () => {
+    const { app } = setup("contributor", undefined, "u-someone-else");
+    const res = await app.inject({
+      method: "POST",
+      url: `/maps/${MAP_ID}/edit`,
+      payload: { rev: 0, put: [point("p2", 36)] },
+    });
+    assert.equal(res.statusCode, 403);
+    assert.match((res.json() as { reason: string }).reason, /only maps it created/);
+    await app.close();
+  });
+
+  test("an editor can edit a map someone else created", async () => {
+    const { app } = setup("editor", undefined, "u-someone-else");
+    const res = await app.inject({
+      method: "POST",
+      url: `/maps/${MAP_ID}/edit`,
+      payload: { rev: 0, put: [point("p2", 36)] },
+    });
+    assert.equal(res.statusCode, 200);
+    await app.close();
+  });
+
+  test("an unknown role is denied rather than allowed", async () => {
+    const { app } = setup("wizard");
+    const res = await app.inject({
+      method: "POST",
+      url: `/maps/${MAP_ID}/edit`,
+      payload: { rev: 0, put: [point("p2", 36)] },
+    });
+    assert.equal(res.statusCode, 403);
+    await app.close();
+  });
+
+  test("editing an unknown map is 404, not 409", async () => {
+    const { app } = setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/maps/nope/edit",
+      payload: { rev: 0, put: [point("p2", 36)] },
+    });
+    assert.equal(res.statusCode, 404);
     await app.close();
   });
 });

@@ -14,7 +14,15 @@ import type {
   StrokeStyle,
   TextDir,
 } from "@livemap/core";
-import type { MapRepo, VersionRecord } from "./repo.js";
+import { authorizeMapEdit } from "./authz.js";
+import type {
+  EditOutcome,
+  MapRepo,
+  PublishSnapshot,
+  RepoCtx,
+  VersionDraft,
+  VersionRecord,
+} from "./repo.js";
 
 type GeoJson =
   | { type: "Point"; coordinates: number[] }
@@ -241,6 +249,82 @@ function decodeFeature(row: {
   }
 }
 
+/**
+ * One statement, two callers. `created_by` is selected but deliberately not
+ * part of the returned MapDoc: the doc is embedded verbatim in every published
+ * artifact, and those are public, so an author's user id must not ride along.
+ * `loadForPublish` returns it as a separate field instead.
+ */
+const MAP_SELECT = `
+  select id, tenant_id, slug, title, title_dir, ui_dir,
+         ST_X(center::geometry) as lng, ST_Y(center::geometry) as lat,
+         zoom, bearing, pitch, basemap_style_id, label_langs,
+         rev, published_version, updated_at, created_by
+    from maps
+   where id = $1 and archived_at is null`;
+
+function decodeMap(r: Record<string, any>): MapDoc {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    slug: r.slug,
+    title: { value: r.title, dir: r.title_dir },
+    viewport: {
+      center: [Number(r.lng), Number(r.lat)],
+      zoom: Number(r.zoom),
+      bearing: Number(r.bearing),
+      pitch: Number(r.pitch),
+    },
+    basemap: { styleId: r.basemap_style_id, labelLangs: r.label_langs },
+    uiDir: r.ui_dir,
+    updatedAt: new Date(r.updated_at).toISOString(),
+    rev: Number(r.rev),
+    ...(r.published_version === null
+      ? {}
+      : { publishedVersion: Number(r.published_version) }),
+  } as MapDoc;
+}
+
+const LATEST_VERSION_SELECT = `
+  select map_id, version, etag, storage_key, byte_size, feature_count,
+         published_at, published_by
+    from map_versions
+   where map_id = $1
+   order by version desc
+   limit 1`;
+
+function decodeVersion(r: Record<string, any>): VersionRecord {
+  return {
+    mapId: r.map_id,
+    version: Number(r.version),
+    etag: r.etag,
+    storageKey: r.storage_key,
+    byteSize: Number(r.byte_size),
+    featureCount: Number(r.feature_count),
+    publishedAt: new Date(r.published_at).toISOString(),
+    publishedBy: r.published_by,
+  };
+}
+
+/**
+ * Every table the migrations put under row-level security. Hard-coded rather
+ * than discovered, because the point of `assertRlsActive` is to catch a table
+ * that SHOULD have policies and does not — a query that asks the catalogue
+ * which tables have RLS can never notice the one that lost it.
+ */
+export const RLS_TABLES = [
+  "tenants",
+  "users",
+  "memberships",
+  "themes",
+  "assets",
+  "maps",
+  "features",
+  "map_versions",
+  "publish_requests",
+  "feeds",
+] as const;
+
 export interface PostgresRepoOptions {
   readonly connectionString: string;
   readonly max?: number;
@@ -271,23 +355,34 @@ export class PostgresRepo implements MapRepo {
   }
 
   /**
-   * Every query runs inside a transaction with app.tenant_id set LOCAL to it.
+   * Every query runs inside a transaction with the full actor context set LOCAL
+   * to it: app.tenant_id, app.user_id and app.role. The policies in
+   * migrations/0002_role_aware_rls.sql read all three — tenant_id for
+   * isolation, and the other two for the role and row-ownership checks.
    *
    * `local = true` is the load-bearing part. A plain `SET` persists on the
    * pooled connection after release, so the next request to borrow it would
    * inherit the previous tenant's scope — the exact cross-tenant leak the RLS
-   * policies exist to prevent.
+   * policies exist to prevent. The same hazard now applies three times over: a
+   * leaked app.role would hand the next request the previous caller's
+   * permissions.
+   *
+   * All three go in one round trip, because set_config is a function call and
+   * a select can make three of them at once.
    */
-  private async inTenant<T>(
-    tenantId: string,
+  private async withCtx<T>(
+    ctx: RepoCtx,
     fn: (c: pg.PoolClient) => Promise<T>,
   ): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      await client.query("select set_config('app.tenant_id', $1, true)", [
-        tenantId,
-      ]);
+      await client.query(
+        `select set_config('app.tenant_id', $1, true),
+                set_config('app.user_id',   $2, true),
+                set_config('app.role',      $3, true)`,
+        [ctx.tenantId, ctx.userId, ctx.role],
+      );
       const out = await fn(client);
       await client.query("commit");
       return out;
@@ -303,44 +398,15 @@ export class PostgresRepo implements MapRepo {
     }
   }
 
-  async getMap(tenantId: string, mapId: string): Promise<MapDoc | null> {
-    return this.inTenant(tenantId, async (c) => {
-      const { rows } = await c.query(
-        `select id, tenant_id, slug, title, title_dir, ui_dir,
-                ST_X(center::geometry) as lng, ST_Y(center::geometry) as lat,
-                zoom, bearing, pitch, basemap_style_id, label_langs,
-                rev, published_version, updated_at
-           from maps
-          where id = $1 and archived_at is null`,
-        [mapId],
-      );
-      const r = rows[0];
-      if (!r) return null;
-
-      return {
-        id: r.id,
-        tenantId: r.tenant_id,
-        slug: r.slug,
-        title: { value: r.title, dir: r.title_dir },
-        viewport: {
-          center: [Number(r.lng), Number(r.lat)],
-          zoom: Number(r.zoom),
-          bearing: Number(r.bearing),
-          pitch: Number(r.pitch),
-        },
-        basemap: { styleId: r.basemap_style_id, labelLangs: r.label_langs },
-        uiDir: r.ui_dir,
-        updatedAt: new Date(r.updated_at).toISOString(),
-        rev: Number(r.rev),
-        ...(r.published_version === null
-          ? {}
-          : { publishedVersion: Number(r.published_version) }),
-      } as MapDoc;
+  async getMap(ctx: RepoCtx, mapId: string): Promise<MapDoc | null> {
+    return this.withCtx(ctx, async (c) => {
+      const { rows } = await c.query(MAP_SELECT, [mapId]);
+      return rows[0] ? decodeMap(rows[0]) : null;
     });
   }
 
-  async listFeatures(tenantId: string, mapId: string): Promise<MapFeature[]> {
-    return this.inTenant(tenantId, async (c) => {
+  async listFeatures(ctx: RepoCtx, mapId: string): Promise<MapFeature[]> {
+    return this.withCtx(ctx, async (c) => {
       // Ordered by the fractional index so the caller never has to sort.
       const { rows } = await c.query(
         `select id, kind, at, ST_AsGeoJSON(geom) as geom, props
@@ -354,16 +420,39 @@ export class PostgresRepo implements MapRepo {
   }
 
   async applyEdit(
-    tenantId: string,
+    ctx: RepoCtx,
     mapId: string,
     expectedRev: number,
     put: readonly MapFeature[],
     remove: readonly string[],
-  ): Promise<number | null> {
-    return this.inTenant(tenantId, async (c) => {
-      // The guard and the bump are one statement. Zero rows means either the
-      // map is gone or the caller read a stale rev; both are a lost write, and
-      // the row lock this takes serialises concurrent writers behind it.
+  ): Promise<EditOutcome> {
+    return this.withCtx(ctx, async (c) => {
+      // Read the map first, so the three ways this can fail stay
+      // distinguishable. A plain select, NOT `for update`: per the Postgres
+      // docs, SELECT ... FOR UPDATE applies the UPDATE policy's USING clause
+      // as well as the SELECT policy's, so a row an ownership policy refuses
+      // would come back empty and get reported as "no such map". The lock is
+      // not needed here anyway — the guarded update below takes it.
+      const head = await c.query(
+        `select rev, created_by from maps where id = $1 and archived_at is null`,
+        [mapId],
+      );
+      if (head.rowCount === 0) return { status: "not_found" } as const;
+
+      // The DB policies are the backstop; this is the copy that can say why.
+      // Without it an ownership refusal would reach the guarded update, match
+      // zero rows, and surface as 409 stale_revision — telling the client to
+      // retry something that can never succeed.
+      const decision = authorizeMapEdit(ctx, {
+        createdBy: head.rows[0]!.created_by,
+      });
+      if (!decision.allowed) {
+        return { status: "forbidden", reason: decision.reason! } as const;
+      }
+
+      // The guard and the bump are one statement. Zero rows means the caller
+      // read a stale rev — a lost write — and the row lock this takes
+      // serialises concurrent writers behind it.
       const guard = await c.query(
         `update maps
             set rev = rev + 1, updated_at = now()
@@ -371,7 +460,7 @@ export class PostgresRepo implements MapRepo {
         returning rev`,
         [mapId, expectedRev],
       );
-      if (guard.rowCount === 0) return null;
+      if (guard.rowCount === 0) return { status: "stale" } as const;
 
       if (remove.length > 0) {
         await c.query(
@@ -383,21 +472,23 @@ export class PostgresRepo implements MapRepo {
       for (const f of put) {
         const e = encodeFeature(f);
         await c.query(
-          `insert into features (id, map_id, tenant_id, kind, at, geom, props, updated_at)
+          `insert into features
+             (id, map_id, tenant_id, kind, at, geom, props, updated_by, updated_at)
            values ($1, $2, $3, $4, $5,
                    case when $6::text is null then null
                         else ST_GeomFromGeoJSON($6)::geography end,
-                   $7::jsonb, now())
+                   $7::jsonb, livemap_current_user(), now())
            on conflict (map_id, id) do update
               set kind = excluded.kind,
                   at = excluded.at,
                   geom = excluded.geom,
                   props = excluded.props,
+                  updated_by = excluded.updated_by,
                   updated_at = now()`,
           [
             f.id,
             mapId,
-            tenantId,
+            ctx.tenantId,
             e.kind,
             e.at,
             e.geom ? JSON.stringify(e.geom) : null,
@@ -406,84 +497,200 @@ export class PostgresRepo implements MapRepo {
         );
       }
 
-      return Number(guard.rows[0]!.rev);
+      return { status: "applied", rev: Number(guard.rows[0]!.rev) } as const;
     });
   }
 
-  async nextVersion(tenantId: string, mapId: string): Promise<number> {
-    return this.inTenant(tenantId, async (c) => {
-      const { rows } = await c.query(
-        `select coalesce(max(version), 0) + 1 as next
-           from map_versions where map_id = $1`,
-        [mapId],
-      );
-      return Number(rows[0]!.next);
-    });
-  }
-
-  async getLatestVersion(
-    tenantId: string,
+  async loadForPublish(
+    ctx: RepoCtx,
     mapId: string,
-  ): Promise<VersionRecord | null> {
-    return this.inTenant(tenantId, async (c) => {
-      const { rows } = await c.query(
-        `select map_id, version, etag, storage_key, byte_size, feature_count,
-                published_at, published_by
-           from map_versions
+  ): Promise<PublishSnapshot | null> {
+    // One transaction for all three reads. Separately they could straddle a
+    // concurrent edit and publish a document whose features never coexisted
+    // with it, or compare an etag against a ledger row written in between.
+    return this.withCtx(ctx, async (c) => {
+      const map = await c.query(MAP_SELECT, [mapId]);
+      if (map.rowCount === 0) return null;
+
+      const feats = await c.query(
+        `select id, kind, at, ST_AsGeoJSON(geom) as geom, props
+           from features
           where map_id = $1
-          order by version desc
-          limit 1`,
+          order by at`,
         [mapId],
       );
-      const r = rows[0];
-      if (!r) return null;
+
+      const latest = await c.query(LATEST_VERSION_SELECT, [mapId]);
+
       return {
-        mapId: r.map_id,
-        version: Number(r.version),
-        etag: r.etag,
-        storageKey: r.storage_key,
-        byteSize: Number(r.byte_size),
-        featureCount: Number(r.feature_count),
-        publishedAt: new Date(r.published_at).toISOString(),
-        publishedBy: r.published_by,
+        doc: decodeMap(map.rows[0]!),
+        createdBy: map.rows[0]!.created_by,
+        features: feats.rows.map(decodeFeature),
+        latest: latest.rows[0] ? decodeVersion(latest.rows[0]) : null,
       };
     });
   }
 
-  async recordVersion(tenantId: string, record: VersionRecord): Promise<void> {
-    await this.inTenant(tenantId, async (c) => {
+  async recordNextVersion(
+    ctx: RepoCtx,
+    mapId: string,
+    build: (version: number) => VersionDraft,
+  ): Promise<VersionRecord | null> {
+    return this.withCtx(ctx, async (c) => {
+      // Allocation and insert in ONE transaction. They used to be two calls —
+      // nextVersion() then recordVersion() — each opening its own transaction,
+      // so two publishers could read the same max(version) and the second would
+      // collide on the (map_id, version) primary key only after it had already
+      // written its artifact.
+      //
+      // A transaction-scoped advisory lock serialises publishers for this map.
+      // `select ... for update` on the maps row would be the obvious lock, but
+      // per the Postgres docs it also applies the maps UPDATE policy, which a
+      // publishing role need not satisfy — publishing writes the ledger, not
+      // the map. The lock is released on commit or rollback, so an interrupted
+      // publish cannot leave it held.
+      await c.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [
+        mapId,
+      ]);
+
+      const exists = await c.query(
+        `select 1 from maps where id = $1 and archived_at is null`,
+        [mapId],
+      );
+      if (exists.rowCount === 0) return null;
+
+      const { rows: n } = await c.query(
+        `select coalesce(max(version), 0) + 1 as next
+           from map_versions where map_id = $1`,
+        [mapId],
+      );
+      const version = Number(n[0]!.next);
+
+      // Called inside the transaction because the artifact's storage key and
+      // byte size both depend on the number just allocated.
+      const draft = build(version);
+
       await c.query(
         `insert into map_versions
            (map_id, version, tenant_id, etag, storage_key, byte_size,
             feature_count, published_at, published_by)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
-          record.mapId,
-          record.version,
-          tenantId,
-          record.etag,
-          record.storageKey,
-          record.byteSize,
-          record.featureCount,
-          record.publishedAt,
-          record.publishedBy,
+          mapId,
+          version,
+          ctx.tenantId,
+          draft.etag,
+          draft.storageKey,
+          draft.byteSize,
+          draft.featureCount,
+          draft.publishedAt,
+          draft.publishedBy,
         ],
       );
+
+      return { ...draft, mapId, version };
+    });
+  }
+
+  async getLatestVersion(
+    ctx: RepoCtx,
+    mapId: string,
+  ): Promise<VersionRecord | null> {
+    return this.withCtx(ctx, async (c) => {
+      const { rows } = await c.query(LATEST_VERSION_SELECT, [mapId]);
+      return rows[0] ? decodeVersion(rows[0]) : null;
     });
   }
 
   async setPublishedVersion(
-    tenantId: string,
+    ctx: RepoCtx,
     mapId: string,
     version: number,
   ): Promise<void> {
-    await this.inTenant(tenantId, async (c) => {
+    await this.withCtx(ctx, async (c) => {
       await c.query(
         `update maps set published_version = $2, updated_at = now()
           where id = $1`,
         [mapId, version],
       );
     });
+  }
+
+  /**
+   * Proves at boot that the isolation everything above depends on is actually
+   * attached.
+   *
+   * Nothing else notices if it is not. A database migrated without the policy
+   * block, a `alter table ... owner to livemap_app` run by a well-meaning
+   * script, or a connection string pointing at a role with BYPASSRLS — each one
+   * starts cleanly and then serves cross-tenant rows. These are cheap read-only
+   * catalogue queries, so there is no reason not to run them on every start.
+   *
+   * Throws with the specific failure rather than returning a boolean: a server
+   * that cannot prove tenant isolation must not accept traffic, and a caller
+   * should not be able to ignore the result.
+   */
+  async assertRlsActive(
+    tables: readonly string[] = RLS_TABLES,
+  ): Promise<void> {
+    const c = await this.pool.connect();
+    try {
+      const { rows: who } = await c.query(
+        `select current_user as role,
+                (select rolbypassrls from pg_roles where rolname = current_user) as bypass`,
+      );
+      const self = who[0]!;
+
+      if (self.bypass) {
+        throw new Error(
+          `the application is connected as "${self.role}", which has BYPASSRLS — ` +
+            "every policy is inert on this connection. Point APP_DATABASE_URL at " +
+            "livemap_app; the bypassrls roles exist for migrations and platform work.",
+        );
+      }
+
+      const { rows } = await c.query(
+        `select c.relname,
+                c.relrowsecurity      as enabled,
+                c.relforcerowsecurity as forced,
+                r.rolname             as owner,
+                (select count(*) from pg_policy p where p.polrelid = c.oid) as policies
+           from pg_class c
+           join pg_namespace n on n.oid = c.relnamespace
+           join pg_roles r     on r.oid = c.relowner
+          where n.nspname = 'public' and c.relname = any($1::text[])`,
+        [[...tables]],
+      );
+
+      const found = new Map(rows.map((r) => [r.relname as string, r]));
+      const problems: string[] = [];
+
+      for (const t of tables) {
+        const r = found.get(t);
+        if (!r) {
+          problems.push(`${t}: table is missing — run the migrations`);
+          continue;
+        }
+        if (!r.enabled) problems.push(`${t}: row level security is not enabled`);
+        if (!r.forced) problems.push(`${t}: FORCE row level security is not set`);
+        if (Number(r.policies) === 0) {
+          problems.push(`${t}: row level security is on but no policy is attached`);
+        }
+        if (r.owner === self.role) {
+          problems.push(
+            `${t}: owned by the connecting role "${r.owner}" — an owner bypasses RLS`,
+          );
+        }
+      }
+
+      if (problems.length > 0) {
+        throw new Error(
+          `tenant isolation is not in force:\n  ${problems.join("\n  ")}`,
+        );
+      }
+    } finally {
+      c.release();
+    }
   }
 
   /** Readiness probe: proves the pool can reach the database. */

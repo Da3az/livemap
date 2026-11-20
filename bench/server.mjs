@@ -30,7 +30,7 @@ if (!DATABASE_URL || !APP_DATABASE_URL) {
 const admin = new pg.Client({ connectionString: DATABASE_URL });
 await admin.connect();
 const { rows } = await admin.query(
-  `select m.id as map_id, m.tenant_id
+  `select m.id as map_id, m.tenant_id, m.created_by
      from maps m join tenants t on t.id = m.tenant_id
     where t.slug = 'bench' and m.slug = 'bench'`,
 );
@@ -42,6 +42,11 @@ if (rows.length === 0) {
 }
 const { map_id: MAP_ID, tenant_id: TENANT_ID } = rows[0];
 
+// Read-only context. `viewer` is the narrowest role that can select, and these
+// endpoints only read — using anything wider would measure a permission this
+// harness does not need.
+const CTX = { tenantId: TENANT_ID, userId: rows[0].created_by, role: "viewer" };
+
 const repo = new PostgresRepo({
   connectionString: APP_DATABASE_URL,
   max: POOL_MAX,
@@ -49,8 +54,8 @@ const repo = new PostgresRepo({
 
 // Build the artifact once at boot, exactly as the publish pipeline would.
 async function rebuild() {
-  const doc = await repo.getMap(TENANT_ID, MAP_ID);
-  const features = await repo.listFeatures(TENANT_ID, MAP_ID);
+  const doc = await repo.getMap(CTX, MAP_ID);
+  const features = await repo.listFeatures(CTX, MAP_ID);
   const version = buildVersion({
     doc,
     features,
@@ -80,9 +85,9 @@ app.get("/ready", async (_req, reply) => {
 // Scenario A — the read path touches the database on every request.
 app.get("/bench/db/:mapId", async (req, reply) => {
   counters.db++;
-  const doc = await repo.getMap(TENANT_ID, req.params.mapId);
+  const doc = await repo.getMap(CTX, req.params.mapId);
   if (!doc) return reply.code(404).send({ error: "not_found" });
-  const features = await repo.listFeatures(TENANT_ID, req.params.mapId);
+  const features = await repo.listFeatures(CTX, req.params.mapId);
   const version = buildVersion({
     doc,
     features,
