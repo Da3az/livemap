@@ -255,31 +255,51 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       root: deps.appDir,
       // "/" is a client route like any other; the fallback below answers it.
       index: false,
-      setHeaders: (res) => {
+      // index.html always goes through the fallback, so it always gets the
+      // page headers (no-cache, framing) whichever URL asked for it.
+      allowedPath: (pathName) => pathName !== "/index.html",
+      // Each response sets its own cache-control below.
+      cacheControl: false,
+      setHeaders: (res, path) => {
         // The embed page runs in a sandboxed frame, whose origin is opaque:
-        // every script and stylesheet it loads is a cross-origin request. These
-        // files are public, so saying so costs nothing.
+        // every script, stylesheet, font and the map worker it loads is a
+        // cross-origin request. These files are public, so saying so costs nothing.
         res.header("access-control-allow-origin", "*");
         res.header("x-content-type-options", "nosniff");
+        // Vite content-hashes everything under assets/, so it can never change
+        // under a cached copy. Anything else at the root keeps a stable name.
+        res.header(
+          "cache-control",
+          /[\\/]assets[\\/]/.test(path)
+            ? "public, max-age=31536000, immutable"
+            : "public, max-age=300",
+        );
       },
     });
   }
-
   const jsonNotFound: RouteHandlerMethod = (_req, reply) =>
     reply.code(404).send({ error: "not_found" });
 
-  // A page request is a GET for a path with no file extension. Anything else
-  // that misses — a script that was renamed, a POST to nowhere — is a real 404
-  // and must not be answered with HTML.
+  // A page request is a GET or HEAD for a path with no file extension (or
+  // index.html itself). Anything else that misses — a script that was renamed,
+  // a POST to nowhere — is a real 404 and must not be answered with HTML.
   const spaFallback: RouteHandlerMethod = (req, reply) => {
     const path = req.url.split("?")[0] ?? "/";
-    const page = req.method === "GET" && !/\.[a-z0-9]+$/i.test(path);
+    const page =
+      (req.method === "GET" || req.method === "HEAD") &&
+      (path === "/index.html" || !/\.[a-z0-9]+$/i.test(path));
     if (!page) return reply.code(404).send({ error: "not_found" });
+    // The embed is the one page meant to live in someone else's frame. Every
+    // other page must not be framed at all.
+    if (path.startsWith("/embed/")) {
+      reply.header("content-security-policy", "frame-ancestors *");
+    } else {
+      reply
+        .header("x-frame-options", "DENY")
+        .header("content-security-policy", "frame-ancestors 'none'");
+    }
     return (
       reply
-        // The shell itself must not be framed; the embed page is a separate
-        // file and is served by the static handler above, without this.
-        .header("x-frame-options", "DENY")
         .header("cache-control", "no-cache")
         // Without this the file sender writes its own cache-control over ours.
         .sendFile("index.html", { cacheControl: false })

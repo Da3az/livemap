@@ -15,7 +15,10 @@ export default defineConfig({
   preview: { port: 5181, strictPort: true },
   build: {
     rolldownOptions: {
+      /* The host-page script for auto-height embeds is its own file at a stable name, loaded by publishers' pages. */
+      input: { main: fileURLToPath(new URL("./index.html", import.meta.url)), "embed-host": fileURLToPath(new URL("./src/embed/host.ts", import.meta.url)) },
       output: {
+        entryFileNames: (chunk) => (chunk.name === "embed-host" ? "embed-host.js" : "assets/[name]-[hash].js"),
         /*
          * MapLibre is about 1 MB minified on its own. Keeping it in one named chunk
          * makes it plain that only the routes that draw a map (editor, versions,

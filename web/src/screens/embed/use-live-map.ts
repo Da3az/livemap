@@ -4,6 +4,9 @@ import type { ApiError } from "@/api/client";
 import { useApi } from "@/app/providers";
 import type { MapVersion, VersionPointer } from "@/model/types";
 
+/** The longest a reader waits between checks while the artifact host is failing. */
+const MAX_BACKOFF_MS = 15 * 60_000;
+
 export interface LiveMap {
   /** The artifact the pointer names, or null when the map is not published. */
   data: MapVersion | null | undefined;
@@ -39,8 +42,14 @@ export function useLiveMap(tenantSlug: string | undefined, mapSlug: string | und
       return answer.pointer;
     },
     enabled,
-    refetchInterval: options.pollMs,
+    /* After failures, back off exponentially so a dead origin is not hammered; a success resets it. */
+    refetchInterval: (query) => {
+      const failures = query.state.fetchFailureCount;
+      return failures === 0 ? options.pollMs : Math.min(options.pollMs * 2 ** failures, MAX_BACKOFF_MS);
+    },
     refetchIntervalInBackground: false,
+    /* Becoming visible again checks at once rather than waiting out the interval. */
+    refetchOnWindowFocus: "always",
   });
 
   const version = pointer.data?.version ?? null;

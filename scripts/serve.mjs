@@ -24,19 +24,13 @@ import { fileURLToPath } from "node:url";
 
 const env = process.env;
 
-// The application shell, built by `npm run build`. Without it this is an API
-// with a reference page and no front door, which is a legitimate thing to run
-// — so it is a warning, not a refusal.
-const APP_DIST = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "packages",
-  "app",
-  "dist",
-);
+// The front end, built by `npm run build` into web/dist. Without it this is an
+// API with a reference page and no front door, which is a legitimate thing to
+// run — so it is a warning, not a refusal.
+const APP_DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
 const appDir = existsSync(join(APP_DIST, "index.html")) ? APP_DIST : null;
 if (!appDir) {
-  console.warn("packages/app/dist is missing: run `npm run build` to serve the application");
+  console.warn("web/dist is missing: run `npm run build` to serve the application");
 }
 const guestSignup = env.GUEST_SIGNUP === "on";
 

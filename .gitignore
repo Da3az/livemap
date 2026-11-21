@@ -11,4 +11,3 @@ claude-plans/
 # loadtest/RESULTS.md.
 loadtest/results/
 
-spikes/shots/*.actual.png

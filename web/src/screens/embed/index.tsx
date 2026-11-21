@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useParams, useSearchParams } from "react-router";
+import { startEmbedChild } from "@/embed/protocol";
 import { LOCALE } from "@/i18n";
 import { EMBED_STRINGS } from "@/i18n/embed";
 import { langForDir } from "@/render/furniture";
@@ -58,6 +59,13 @@ export default function Embed() {
   const { tenant, slug } = useParams();
   const [params] = useSearchParams();
   const themeParam = readTheme(params.get("theme"));
+  const embedId = params.get("embedId");
+
+  /* With `embedId` the host page's script grows the frame when the map's furniture does not fit it. */
+  useEffect(() => {
+    if (embedId === null) return;
+    return startEmbedChild({ id: embedId, target: document.body });
+  }, [embedId]);
   const published = useLiveMap(tenant, slug, { pollMs: POLL_MS });
   const online = useOnline();
   const version = published.data ?? null;

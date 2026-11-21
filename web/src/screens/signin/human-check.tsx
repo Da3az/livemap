@@ -1,16 +1,109 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { useShellStrings } from "@/i18n/shell";
 
 type Phase = "idle" | "verifying" | "verified";
 
+interface HumanCheckProps {
+  siteKey: string;
+  invalid: boolean;
+  onToken: (token: string | null) => void;
+}
+
+/** The mock hands out site keys of this form; anything else is a real Cloudflare Turnstile key. */
+const MOCK_SITE_KEY = /^mock-/;
+
 /**
- * Stands where the human-verification widget will be mounted, at the size
- * such a widget takes, so the layout around it is the real one. It hands back
- * a token the mock accepts. INTEGRATION: replace the body with the provider's
- * widget rendered for `siteKey`; `onToken` keeps its meaning.
+ * The human check before a guest workspace is created: Cloudflare Turnstile
+ * for a real site key, a stand-in of the same size for the mock's. `onToken`
+ * receives the token to send with the signup, or null when it lapses.
  */
-export function HumanCheck({ siteKey, invalid, onToken }: { siteKey: string; invalid: boolean; onToken: (token: string | null) => void }) {
+export function HumanCheck(props: HumanCheckProps) {
+  return MOCK_SITE_KEY.test(props.siteKey) ? <StandInCheck {...props} /> : <TurnstileCheck {...props} />;
+}
+
+interface Turnstile {
+  render(
+    container: HTMLElement,
+    options: {
+      sitekey: string;
+      callback: (token: string) => void;
+      "error-callback": () => void;
+      "expired-callback": () => void;
+      theme: "light" | "dark";
+      size: "normal" | "flexible";
+    },
+  ): string;
+  remove(widgetId: string): void;
+}
+
+const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+let turnstileLoad: Promise<Turnstile> | null = null;
+
+/** Loaded only when a real site key is configured; a deployment without one never contacts the host. */
+function loadTurnstile(): Promise<Turnstile> {
+  const host = window as unknown as { turnstile?: Turnstile };
+  if (host.turnstile) return Promise.resolve(host.turnstile);
+  turnstileLoad ??= new Promise<Turnstile>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = TURNSTILE_SRC;
+    script.async = true;
+    script.onload = () => (host.turnstile ? resolve(host.turnstile) : reject(new Error("unavailable")));
+    script.onerror = () => {
+      turnstileLoad = null;
+      reject(new Error("unavailable"));
+    };
+    document.head.append(script);
+  });
+  return turnstileLoad;
+}
+
+function TurnstileCheck({ siteKey, invalid, onToken }: HumanCheckProps) {
+  const t = useShellStrings();
+  const container = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let widget: { api: Turnstile; id: string } | null = null;
+    let cancelled = false;
+    loadTurnstile()
+      .then((api) => {
+        if (cancelled || !container.current) return;
+        const id = api.render(container.current, {
+          sitekey: siteKey,
+          theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
+          size: "flexible",
+          callback: (token) => onToken(token),
+          "expired-callback": () => onToken(null),
+          "error-callback": () => {
+            onToken(null);
+            setFailed(true);
+          },
+        });
+        widget = { api, id };
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+      if (widget) widget.api.remove(widget.id);
+    };
+  }, [siteKey, onToken]);
+
+  return (
+    <div role="group" aria-label={t.signin.humanLabel} className={`w-full max-w-xs rounded-key border ${invalid ? "border-danger" : "border-transparent"}`}>
+      <div ref={container} className="min-h-16" />
+      {failed ? (
+        <p role="alert" className="mt-1.5 text-xs font-medium text-danger">
+          {t.signin.humanUnavailable}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function StandInCheck({ siteKey, invalid, onToken }: HumanCheckProps) {
   const t = useShellStrings();
   const [phase, setPhase] = useState<Phase>("idle");
 

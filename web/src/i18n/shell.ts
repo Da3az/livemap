@@ -106,6 +106,7 @@ const en = {
     humanVerifying: "Verifying…",
     humanVerified: "Verified",
     humanCaption: "Verification widget",
+    humanUnavailable: "The human check could not load, so a guest workspace cannot be created right now. Reload the page to try again.",
 
     tokenHeading: "Sign in with a session token",
     tokenLead: "For members of a workspace. An owner or admin issues the token.",
