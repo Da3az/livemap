@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>livemap — fills above or below place names</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,sans-serif;color:#17211c;background:#e9eee8}
+header{padding:16px 20px 10px}
+h1{font-size:19px;margin:0 0 4px}
+p{margin:4px 0;max-width:100ch}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:6px 20px 12px}
+.bar button{font:inherit;padding:4px 12px;border:1px solid #a9b6ab;background:#fff;border-radius:6px;cursor:pointer}
+.bar button[aria-pressed=true]{background:#1c6b50;color:#fff;border-color:#1c6b50}
+.bar span{color:#5c6b62;margin-inline-start:10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 20px 20px;height:calc(100vh - 150px);min-height:520px}
+.pane{display:flex;flex-direction:column;background:#fff;border:1px solid #d3dbd2}
+.pane h2{margin:0;padding:8px 12px;font-size:14px;border-bottom:1px solid #d3dbd2}
+.pane h2 small{font-weight:400;color:#5c6b62}
+.map{flex:1;position:relative}
+@media (max-width:900px){.grid{grid-template-columns:1fr;height:auto}.map{height:420px}}
+</style>
+</head>
+<body>
+<header>
+<h1>Fills above the basemap's names (today) or below them (proposed)</h1>
+<p>Same map, same features, same zoom. Only one thing differs: whether the coloured areas and lines are drawn over the basemap's own place and road names, or under them. Your own feature labels, icons and notes stay on top in both. Pan or zoom either map and the other follows.</p>
+</header>
+<div class="bar">
+<button data-opt="opacity" data-v="0.35" aria-pressed="true">Fill 35%</button>
+<button data-opt="opacity" data-v="0.7">Fill 70%</button>
+<span></span>
+<button data-opt="labels" data-v="ar" aria-pressed="true">Names in Arabic</button>
+<button data-opt="labels" data-v="en">Names in English</button>
+<span></span>
+<button data-opt="style" data-v="positron" aria-pressed="true">Light</button>
+<button data-opt="style" data-v="dark">Dark</button>
+</div>
+<div class="grid">
+<div class="pane"><h2>Today: fills over the names <small>— what web/ draws now</small></h2><div class="map" id="a"></div></div>
+<div class="pane"><h2>Proposed: fills under the names <small>— option 2B in the other chat</small></h2><div class="map" id="b"></div></div>
+</div>
+<script src="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.js"></script>
+<script>
+"use strict";
+const S = { opacity: 0.35, labels: "ar", style: "positron" };
+const PAL = { light: ["#b0250f","#3854c3","#cfa200","#863079","#136a42"], dark: ["#d72623","#5d51fd","#cd8100","#b02eaf","#087956"] };
+const G = {
+  red: [[56.72,24.45],[57.12,24.07],[57.46,23.95],[57.66,23.85],[57.92,23.78],[57.92,23.5],[57.6,23.48],[57.35,23.58],[57.0,23.72],[56.55,24.12],[56.72,24.45]],
+  orange: [[57.92,23.78],[58.25,23.78],[58.7,23.68],[58.85,23.4],[58.5,23.25],[58.0,23.3],[57.92,23.5],[57.92,23.78]],
+  cone: [[57.9,24.05],[57.3,24.2],[56.3,23.95],[55.9,23.45],[56.1,22.95],[56.9,23.15],[57.6,23.55],[57.9,23.75],[57.9,24.05]],
+  obs: [[61.6,24.45],[60.6,24.3],[59.6,24.15],[58.7,24.0],[57.9,23.9],[57.55,23.84]],
+  fc: [[57.55,23.84],[56.9,23.6],[56.2,23.3]]
+};
+const F = (g, p = {}) => ({ type: "Feature", geometry: g, properties: p });
+const views = {};
+
+function nameExpr(lang) {
+  return lang === "ar"
+    ? ["coalesce", ["get", "name:ar"], ["get", "name"]]
+    : ["coalesce", ["get", "name:en"], ["get", "name_en"], ["get", "name"]];
+}
+function firstSymbolId(map) {
+  for (const l of map.getStyle().layers) if (l.type === "symbol") return l.id;
+  return undefined;
+}
+function addFeatures(map, below) {
+  const c = PAL[S.style === "dark" ? "dark" : "light"];
+  const before = below ? firstSymbolId(map) : undefined;
+  const src = (id, d) => map.addSource(id, { type: "geojson", data: d });
+  src("cone", F({ type: "Polygon", coordinates: [G.cone] }));
+  src("orange", F({ type: "Polygon", coordinates: [G.orange] }));
+  src("red", F({ type: "Polygon", coordinates: [G.red] }));
+  src("obs", F({ type: "LineString", coordinates: G.obs }));
+  src("fc", F({ type: "LineString", coordinates: G.fc }));
+  src("pts", { type: "FeatureCollection", features: [
+    F({ type: "Point", coordinates: [57.09, 23.97] }, { t: S.labels === "ar" ? "طريق مغمور" : "Flooded road" }),
+    F({ type: "Point", coordinates: [56.73, 24.34] }, { t: S.labels === "ar" ? "مركز إيواء" : "Shelter" })
+  ]});
+  const add = (l) => map.addLayer(l, before);
+  add({ id: "cone-f", type: "fill", source: "cone", paint: { "fill-color": c[3], "fill-opacity": S.opacity * 0.7 } });
+  add({ id: "cone-l", type: "line", source: "cone", paint: { "line-color": c[3], "line-width": 1.5, "line-dasharray": [3, 2] } });
+  add({ id: "orange-f", type: "fill", source: "orange", paint: { "fill-color": c[2], "fill-opacity": S.opacity } });
+  add({ id: "orange-l", type: "line", source: "orange", paint: { "line-color": c[2], "line-width": 2 } });
+  add({ id: "red-f", type: "fill", source: "red", paint: { "fill-color": c[0], "fill-opacity": S.opacity } });
+  add({ id: "red-l", type: "line", source: "red", paint: { "line-color": c[0], "line-width": 2 } });
+  add({ id: "obs-l", type: "line", source: "obs", layout: { "line-cap": "round" }, paint: { "line-color": c[1], "line-width": 3 } });
+  add({ id: "fc-l", type: "line", source: "fc", paint: { "line-color": c[1], "line-width": 3, "line-dasharray": [1.6, 1.4] } });
+  /* the author's own markers and labels: always on top in both */
+  map.addLayer({ id: "pts-c", type: "circle", source: "pts", paint: { "circle-radius": 8, "circle-color": c[4], "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
+  map.addLayer({ id: "pts-t", type: "symbol", source: "pts", layout: { "text-field": ["get", "t"], "text-font": ["Noto Sans Bold"], "text-size": 13, "text-offset": [0, 1.3], "text-anchor": "top" }, paint: { "text-color": S.style === "dark" ? "#e8eee9" : "#17211c", "text-halo-color": S.style === "dark" ? "#151c18" : "#fff", "text-halo-width": 1.5 } });
+}
+function setLabelLanguage(map) {
+  for (const l of map.getStyle().layers) {
+    if (l.type !== "symbol" || !l.layout || !l.layout["text-field"]) continue;
+    const tf = JSON.stringify(l.layout["text-field"]);
+    if (/name/.test(tf) && !/\bref\b/.test(tf)) map.setLayoutProperty(l.id, "text-field", nameExpr(S.labels));
+  }
+}
+function build(id, below) {
+  if (views[id]) views[id].remove();
+  const prev = views.view;
+  const map = new maplibregl.Map({
+    container: id,
+    style: "https://tiles.openfreemap.org/styles/" + S.style,
+    center: prev ? prev.center : [57.6, 23.75], zoom: prev ? prev.zoom : 7.2,
+    attributionControl: { compact: true }
+  });
+  map.on("load", () => { setLabelLanguage(map); addFeatures(map, below); });
+  views[id] = map;
+  return map;
+}
+let syncing = false;
+function link(a, b) {
+  const follow = (src, dst) => src.on("move", () => {
+    if (syncing) return; syncing = true;
+    dst.jumpTo({ center: src.getCenter(), zoom: src.getZoom(), bearing: src.getBearing(), pitch: src.getPitch() });
+    views.view = { center: src.getCenter(), zoom: src.getZoom() };
+    syncing = false;
+  });
+  follow(a, b); follow(b, a);
+}
+function rebuild() { link(build("a", false), build("b", true)); }
+document.querySelectorAll(".bar button").forEach(btn => btn.addEventListener("click", () => {
+  const k = btn.dataset.opt;
+  S[k] = k === "opacity" ? Number(btn.dataset.v) : btn.dataset.v;
+  document.querySelectorAll(`.bar button[data-opt="${k}"]`).forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  rebuild();
+}));
+rebuild();
+</script>
+</body>
+</html>

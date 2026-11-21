@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>livemap — Stage 2: three visual directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600&family=Noto+Kufi+Arabic:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Libre+Franklin:wght@400;500;600&family=Noto+Naskh+Arabic:wght@500;600&family=Noto+Sans+Arabic:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.css">
+<style>
+/* ---------- page chrome (deliberately plain; the samples are the subject) ---------- */
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,sans-serif;color:#1b1f23;background:#fff}
+.page{max-width:1440px;margin:0 auto;padding:28px 28px 80px}
+h1{font-size:24px;margin:0 0 6px}
+h2{font-size:20px;margin:56px 0 4px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#57606a;margin:26px 0 8px}
+p{margin:6px 0;max-width:86ch}
+.lede{color:#3d444d}
+.rec{border:2px solid #1b1f23;padding:14px 18px;margin:18px 0 8px;max-width:980px}
+.rec b{font-size:16px}
+.rec ul{margin:8px 0 0;padding-inline-start:20px}
+.tag{font-size:12px;font-weight:600;border:1.5px solid #1b1f23;padding:1px 8px;border-radius:2px}
+.tag.pick{background:#1b1f23;color:#fff}
+.nav{display:flex;gap:16px;margin:14px 0 0;flex-wrap:wrap}
+.nav a{color:#0b57d0}
+.bar{display:flex;gap:10px;align-items:center;margin:10px 0}
+.bar button{font:inherit;font-size:13px;padding:4px 12px;border:1px solid #8c959f;background:#fff;border-radius:3px;cursor:pointer}
+.bar button[aria-pressed=true]{background:#1b1f23;color:#fff;border-color:#1b1f23}
+.fit{border:1px solid #c9d1d9;overflow:hidden;position:relative;background:#eee}
+.frame{width:1360px;height:800px;transform-origin:0 0;position:absolute;inset-block-start:0;inset-inline-start:0}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+@media (max-width:1000px){.cols{grid-template-columns:1fr}}
+.sw{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.sw div.c{border:1px solid #d0d7de;font-size:12px;line-height:1.35}
+.sw .chip{height:44px;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px}
+.sw .m{padding:6px 8px}
+.sw .m b{display:block;font-size:12.5px}
+.sw .m code{font-size:11.5px}
+.sw .r{display:block;color:#57606a}
+.sw .r.bad{color:#a40e26;font-weight:600}
+.note{font-size:13px;color:#3d444d;max-width:86ch}
+.spec{border:1px solid #d0d7de;padding:14px 16px}
+.spec .l1{font-size:26px;line-height:1.25}
+.spec .l2{font-size:14px;margin-top:8px}
+.spec .l3{font-size:12px;margin-top:8px;font-variant-numeric:tabular-nums}
+table.cmp{border-collapse:collapse;font-size:13.5px;margin-top:8px}
+table.cmp th,table.cmp td{border:1px solid #d0d7de;padding:6px 10px;text-align:start;vertical-align:top}
+table.cmp th{background:#f6f8fa}
+ul.tight{margin:4px 0;padding-inline-start:20px;max-width:86ch}
+
+/* ---------- shared sample plumbing ---------- */
+.smp{width:1360px;height:800px;display:grid;color:var(--tx);background:var(--bg);font-family:var(--f-ui);font-size:13px;line-height:1.3;overflow:hidden}
+.smp *{box-sizing:border-box}
+.smp button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:default}
+.smp svg{display:block;flex:none}
+.smp kbd{font:inherit;font-size:10.5px;color:var(--tx3);border:1px solid var(--rule2);border-radius:2px;padding:0 3px;min-width:15px;text-align:center}
+.smp .map{position:relative;min-width:0;min-height:0;background:var(--sunk)}
+.smp .map .gl{position:absolute;inset:0}
+.smp .mk-num{width:20px;height:20px;border-radius:50%;background:var(--panel);border:2px solid var(--c);color:var(--tx);font-size:11px;font-weight:600;display:grid;place-items:center;font-family:var(--f-dense)}
+.smp .mk-ico{width:22px;height:22px;border-radius:var(--r-ico);background:var(--c);color:#fff;display:grid;place-items:center;border:1.5px solid var(--panel)}
+.smp .mk-lab{font-size:11.5px;font-weight:600;color:var(--tx);text-shadow:0 0 2px var(--halo),0 0 2px var(--halo),0 0 3px var(--halo);white-space:nowrap}
+.smp .mk-ann{background:var(--panel);border:1px solid var(--tx);padding:4px 8px;font-size:12px;font-weight:500;max-width:210px;border-radius:var(--r-s)}
+.smp .legend{position:absolute;inset-block-start:12px;inset-inline-end:12px;background:var(--panel);border:1px solid var(--rule2);padding:8px 10px;min-width:170px;border-radius:var(--r-m)}
+.smp .legend h4{margin:0 0 6px;font-size:11px;font-weight:600;color:var(--tx2)}
+.smp .legend li{display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 0}
+.smp .legend ul{list-style:none;margin:0;padding:0}
+.smp .lsw{width:18px;height:12px;border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 35%,transparent)}
+.smp .lsw.h{background:repeating-linear-gradient(45deg,var(--c) 0 1.5px,transparent 1.5px 5px);border-style:dashed}
+.smp .lsw.l{height:0;border-width:2px 0 0;background:none}
+.smp .tl{position:absolute;inset-inline:12px;inset-block-end:12px;background:var(--panel);border:1px solid var(--rule2);display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:var(--r-m)}
+.smp .tl .trk{flex:1;height:26px;position:relative;border-inline:1px solid var(--rule2)}
+.smp .tl .bars{position:absolute;inset:0;display:flex;align-items:flex-end;gap:2px;padding-inline:2px}
+.smp .tl .bars i{flex:1;background:var(--rule2)}
+.smp .tl .win{position:absolute;inset-block:0;inset-inline-start:38%;width:30%;background:color-mix(in srgb,var(--s1) 22%,transparent);border-inline:2px solid var(--s1)}
+.smp .tl .tick{position:absolute;inset-block-end:-1px;font-size:10px;color:var(--tx3);transform:translateY(100%)}
+.smp .tl .now{font-family:var(--f-dense);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.smp .tl .play{border:1px solid var(--rule2);padding:3px 10px;border-radius:var(--r-s);font-size:12px;font-weight:500}
+.smp .tl{padding-block-end:18px}
+.smp .state{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;white-space:nowrap}
+.smp .state svg{color:var(--c)}
+.smp .kind{width:16px;height:16px;color:var(--c)}
+.smp .swatch{width:18px;height:18px;border:1px solid var(--rule2);background:var(--c);border-radius:var(--r-s)}
+.smp .seg{display:inline-flex;border:1px solid var(--rule2);border-radius:var(--r-s);overflow:hidden}
+.smp .seg span{padding:2px 8px;font-size:12px;border-inline-start:1px solid var(--rule2)}
+.smp .seg span:first-child{border-inline-start:0}
+.smp .seg .on{background:var(--tx);color:var(--panel)}
+.smp .field{border:1px solid var(--rule2);padding:2px 7px;border-radius:var(--r-s);background:var(--panel);font-variant-numeric:tabular-nums;min-height:24px;display:inline-flex;align-items:center;gap:6px}
+.smp .rng{flex:1;height:3px;background:var(--rule2);position:relative;min-width:60px}
+.smp .rng::after{content:"";position:absolute;inset-block-start:-5px;inset-inline-start:35%;width:13px;height:13px;border-radius:50%;background:var(--panel);border:2px solid var(--tx)}
+.smp .rng::before{content:"";position:absolute;inset-block:0;inset-inline-start:0;width:35%;background:var(--tx)}
+.maplibregl-ctrl-attrib{font-size:10px}
+
+/* ---------- A · Copy desk ---------- */
+.smp-a{grid-template-rows:44px 38px 1fr 26px;grid-template-columns:304px 1fr 300px}
+.smp-a .top{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding-inline:14px;border-block-end:1px solid var(--rule2);background:var(--panel)}
+.smp-a .wm{font-weight:600;letter-spacing:-.01em;color:var(--brand)}
+.smp-a .crumb{color:var(--tx3)}
+.smp-a .ttl{font-size:15px;font-weight:600;border-block-end:1px dashed var(--rule2);padding-block:2px}
+.smp-a .sp{flex:1}
+.smp-a .btn{border:1px solid var(--rule2);padding:4px 11px;border-radius:var(--r-s);font-weight:500;background:var(--panel);display:inline-flex;gap:7px;align-items:center}
+.smp-a .pubwrap{display:flex;align-items:stretch;border:1px solid var(--brand);border-radius:var(--r-s);overflow:hidden}
+.smp-a .pubwrap .live{padding:3px 10px;display:flex;flex-direction:column;justify-content:center;font-size:11px;line-height:1.25;background:var(--panel)}
+.smp-a .pubwrap .pub{background:var(--brand);color:var(--on-brand);padding:0 16px;font-weight:600;display:flex;align-items:center}
+.smp-a .tools{grid-column:1/-1;display:flex;align-items:stretch;border-block-end:1px solid var(--rule2);background:var(--bg);padding-inline:6px}
+.smp-a .tool{display:flex;align-items:center;gap:6px;padding-inline:11px;border-inline-end:1px solid var(--rule);font-weight:500}
+.smp-a .tool.on{background:var(--panel);box-shadow:inset 0 -3px 0 var(--brand);color:var(--brand)}
+.smp-a .tools .search{margin-inline-start:auto;align-self:center;width:300px;color:var(--tx3)}
+.smp-a .list{border-inline-end:1px solid var(--rule2);background:var(--panel);overflow:hidden;font-family:var(--f-dense)}
+.smp-a .ph{display:flex;justify-content:space-between;align-items:center;height:30px;padding-inline:10px;border-block-end:1px solid var(--rule2);font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tx2);font-family:var(--f-ui)}
+.smp-a .row{display:grid;grid-template-columns:14px 16px 1fr auto 34px;align-items:center;gap:7px;height:26px;padding-inline:8px;border-block-end:1px solid var(--rule)}
+.smp-a .row.g{grid-template-columns:1fr auto;background:var(--bg);font-weight:600;font-family:var(--f-ui);font-size:12px}
+.smp-a .row.sel{background:color-mix(in srgb,var(--brand) 11%,var(--panel));box-shadow:inset 3px 0 0 var(--brand)}
+[dir=rtl] .smp-a .row.sel,.smp-a[dir=rtl] .row.sel{box-shadow:inset -3px 0 0 var(--brand)}
+.smp-a .row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smp-a .row .dt{color:var(--tx3);font-size:11.5px;font-variant-numeric:tabular-nums}
+.smp-a .row .ic{display:flex;gap:4px;color:var(--tx3)}
+.smp-a .row .grip{color:var(--rule2)}
+.smp-a .insp{border-inline-start:1px solid var(--rule2);background:var(--panel)}
+.smp-a .insp .hd{padding:8px 12px;border-block-end:1px solid var(--rule2)}
+.smp-a .insp .hd small{display:block;color:var(--tx3);font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.smp-a .insp .hd b{font-size:14px}
+.smp-a .fr{display:grid;grid-template-columns:86px 1fr;align-items:center;gap:8px;min-height:34px;padding:4px 12px;border-block-end:1px solid var(--rule)}
+.smp-a .fr>label{color:var(--tx2);font-size:12px}
+.smp-a .fr>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.smp-a .sec{padding:5px 12px;background:var(--bg);border-block-end:1px solid var(--rule);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--tx2)}
+.smp-a .stat{grid-column:1/-1;display:flex;align-items:center;gap:18px;padding-inline:12px;border-block-start:1px solid var(--rule2);background:var(--bg);font-size:11.5px;color:var(--tx2);font-family:var(--f-dense);font-variant-numeric:tabular-nums}
+
+/* ---------- B · Control room ---------- */
+.smp-b{grid-template-rows:42px 1fr;grid-template-columns:1fr 344px}
+.smp-b .top{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding-inline:0 12px;background:var(--panel);border-block-end:1px solid #000}
+.smp-b .wm{width:54px;align-self:stretch;display:grid;place-items:center;font-family:var(--f-dense);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:var(--brand);color:var(--on-brand)}
+.smp-b .ttl{font-size:15px;font-weight:600}
+.smp-b .sp{flex:1}
+.smp-b .lamp{display:flex;align-items:center;gap:8px;padding:0 12px;height:28px;background:var(--sunk);font-family:var(--f-dense);font-size:12.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+.smp-b .lamp i{width:9px;height:9px;border-radius:50%;background:var(--c);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 30%,transparent)}
+.smp-b .btn{height:28px;padding-inline:13px;background:var(--raised);font-weight:500;display:inline-flex;align-items:center;gap:7px;border-radius:var(--r-s)}
+.smp-b .pub{height:28px;padding-inline:18px;background:var(--brand);color:var(--on-brand);font-family:var(--f-dense);font-weight:600;letter-spacing:.06em;text-transform:uppercase;border-radius:var(--r-s);display:inline-flex;align-items:center}
+.smp-b .dock{position:absolute;inset-block-end:86px;inset-inline-start:50%;transform:translateX(-50%);display:flex;background:var(--panel);border:1px solid #000;border-radius:var(--r-s);padding:3px;gap:2px}
+.smp-b[dir=rtl] .dock{transform:translateX(50%)}
+.smp-b .dock .tool{display:flex;align-items:center;gap:6px;height:30px;padding-inline:10px;border-radius:var(--r-s);font-weight:500;color:var(--tx2);white-space:nowrap}
+.smp-b .dock .tool kbd{border:0;font-family:var(--f-dense);color:var(--tx3)}
+.smp-b .dock .tool.on{background:var(--s1);color:var(--bg)}
+.smp-b .dock .tool.on kbd{color:var(--bg)}
+.smp-b .side{background:var(--panel);border-inline-start:1px solid #000;display:flex;flex-direction:column;min-height:0}
+.smp-b .tabs{display:flex;background:var(--sunk)}
+.smp-b .tabs span{flex:1;text-align:center;padding:8px 0;font-family:var(--f-dense);font-size:12.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--tx3)}
+.smp-b .tabs .on{color:var(--tx);background:var(--panel);box-shadow:inset 0 2px 0 var(--brand)}
+.smp-b .cap{display:flex;justify-content:space-between;padding:5px 12px;background:var(--raised);font-family:var(--f-dense);font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--tx2)}
+.smp-b .row{display:grid;grid-template-columns:16px 1fr auto 34px;align-items:center;gap:8px;height:27px;padding-inline:12px}
+.smp-b .row.sel{background:color-mix(in srgb,var(--s1) 24%,var(--panel));outline:1px solid var(--s1);outline-offset:-1px}
+.smp-b .row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smp-b .row .dt{color:var(--tx3);font-family:var(--f-dense);font-size:12px;font-variant-numeric:tabular-nums}
+.smp-b .row .ic{display:flex;gap:4px;color:var(--tx3)}
+.smp-b .fr{display:grid;grid-template-columns:78px 1fr;align-items:center;gap:8px;padding:5px 12px}
+.smp-b .fr>label{color:var(--tx3);font-family:var(--f-dense);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+.smp-b .fr>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.smp-b .field,.smp-b .seg{background:var(--sunk);border-color:var(--rule)}
+.smp-b .chips{position:absolute;inset-block-start:12px;inset-inline-start:12px;display:flex;gap:6px;font-family:var(--f-dense);font-size:12px;font-variant-numeric:tabular-nums}
+.smp-b .chips span{background:var(--panel);padding:3px 8px;color:var(--tx2)}
+.smp-b .tl{inset-inline:0;inset-block-end:0;border-radius:0;border-inline:0;border-block-end:0;padding-block:10px 22px}
+.smp-b .tl .trk{height:34px}
+.smp-b .tl .play{background:var(--brand);color:var(--on-brand);border:0;font-family:var(--f-dense);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+
+/* ---------- C · Atlas ---------- */
+.smp-c{grid-template-rows:62px 1fr;grid-template-columns:288px 1fr 316px;gap:10px;padding:0 10px 10px}
+.smp-c .top{grid-column:1/-1;display:flex;align-items:center;gap:16px;padding-inline:8px}
+.smp-c .wm{font-family:var(--f-title);font-size:19px;font-weight:600;color:var(--brand)}
+.smp-c .ttl{font-family:var(--f-title);font-size:23px;font-weight:500;letter-spacing:-.01em}
+.smp-c .sub{font-size:12px;color:var(--tx3)}
+.smp-c .sp{flex:1}
+.smp-c .btn{padding:7px 14px;border-radius:999px;border:1px solid var(--rule2);font-weight:500;background:var(--panel)}
+.smp-c .pubwrap{display:flex;align-items:center;background:var(--panel);border-radius:999px;border:1px solid var(--rule2);padding:3px;gap:10px}
+.smp-c .pubwrap .live{padding-inline-start:12px;font-size:12px}
+.smp-c .pubwrap .pub{background:var(--brand);color:var(--on-brand);border-radius:999px;padding:6px 16px;font-weight:600}
+.smp-c .pane{background:var(--panel);border-radius:var(--r-l);overflow:hidden;min-height:0;border:1px solid var(--rule)}
+.smp-c .ph{padding:12px 14px 6px;font-family:var(--f-title);font-size:17px;font-weight:500;display:flex;justify-content:space-between;align-items:baseline}
+.smp-c .ph small{font-family:var(--f-ui);font-size:12px;color:var(--tx3)}
+.smp-c .gh{padding:10px 14px 3px;font-size:11.5px;font-weight:600;color:var(--s1)}
+.smp-c .row{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:10px;height:35px;padding-inline:14px}
+.smp-c .row.sel{background:var(--sunk);box-shadow:inset 0 0 0 1.5px var(--brand);border-radius:8px;margin-inline:6px;padding-inline:8px}
+.smp-c .row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smp-c .row .dt{color:var(--tx3);font-size:12px;font-variant-numeric:tabular-nums}
+.smp-c .row .kind{width:20px;height:20px}
+.smp-c .blk{margin:8px 10px;padding:10px 12px;background:var(--sunk);border-radius:8px}
+.smp-c .blk h5{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--tx2)}
+.smp-c .fr{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-block:4px}
+.smp-c .fr>label{color:var(--tx2)}
+.smp-c .fr>div{display:flex;align-items:center;gap:8px}
+.smp-c .map{border-radius:var(--r-l);overflow:hidden;border:1px solid var(--rule)}
+.smp-c .dock{position:absolute;inset-block-end:74px;inset-inline-start:50%;transform:translateX(-50%);display:flex;background:var(--panel);border:1px solid var(--rule2);border-radius:999px;padding:4px;gap:2px;box-shadow:0 2px 0 var(--rule2)}
+.smp-c[dir=rtl] .dock{transform:translateX(50%)}
+.smp-c .dock .tool{padding:6px 12px;border-radius:999px;display:flex;gap:6px;align-items:center;font-weight:500}
+.smp-c .dock .tool.on{background:var(--brand);color:var(--on-brand)}
+.smp-c .dock .tool.on kbd{color:var(--on-brand);border-color:color-mix(in srgb,var(--on-brand) 50%,transparent)}
+.smp-c .legend{border-radius:4px;border-color:var(--tx)}
+.smp-c .legend h4{font-family:var(--f-title);font-size:14px;color:var(--tx);font-weight:600}
+.smp-c .tl{border-radius:999px;padding:8px 16px 20px}
+.smp-c .coords{position:absolute;inset-block-start:12px;inset-inline-start:12px;background:var(--panel);border:1px solid var(--rule2);border-radius:999px;padding:3px 12px;font-size:11.5px;color:var(--tx2);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="page">
+<h1>livemap — three visual directions for the editor</h1>
+<p class="lede">The same screen three ways: the editor with a real map, the tools, the feature list and the style panel open on a selected area. The map is a real MapLibre map over OpenFreeMap tiles showing Cyclone Shaheen's approach to Oman (October 2021). Use the LTR / RTL switch above each sample to see it mirrored with an Arabic interface.</p>
+
+<div class="rec">
+<b>Second round: C and B, changed as you asked.</b>
+<ul>
+<li><b>C · Atlas now has light and dark.</b> Use the Light / Dark switch above its sample. Dark has its own neutrals, its own state colours and its own eight map colours, which pass the colour-blindness check on every pair.</li>
+<li><b>B · Control room has its tools in a dock at the bottom of the map,</b> like C, with a word and shortcut beside each icon. The left rail is gone, so the map is wider.</li>
+<li><b>Between the two, I recommend C.</b> It now covers dark as well, its map colours pass in both modes where B's do not, and its light mode matches the light pages maps are published on.</li>
+<li>A is unchanged, further down, for reference.</li>
+</ul>
+</div>
+<div class="nav"><a href="#a">A · Copy desk</a><a href="#b">B · Control room</a><a href="#c">C · Atlas</a><a href="#compare">Side-by-side comparison</a></div>
+
+<div id="out"></div>
+
+<h2 id="compare">Comparison</h2>
+<table class="cmp">
+<tr><th></th><th>A · Copy desk</th><th>B · Control room</th><th>C · Atlas</th></tr>
+<tr><th>Surface</th><td>Light, white and cool grey</td><td>Dark blue-slate</td><td>Light grey-green tint, and a dark green-slate mode</td></tr>
+<tr><th>Typeface</th><td>IBM Plex Sans + Condensed, Plex Sans Arabic</td><td>Barlow + Semi Condensed, Noto Kufi Arabic</td><td>Newsreader titles, Libre Franklin; Noto Naskh and Noto Sans Arabic</td></tr>
+<tr><th>Tools</th><td>Horizontal bar, word + key</td><td>Dock over the map, icon + word + key</td><td>Dock over the map, word + key</td></tr>
+<tr><th>Panels</th><td>Ruled tables flush to the edges, no gaps</td><td>One tabbed side panel, filled caption bars</td><td>Separate rounded panes on a tinted page</td></tr>
+<tr><th>List row</th><td>26px</td><td>27px</td><td>35px</td></tr>
+<tr><th>Corners</th><td>2px everywhere</td><td>0 on panels, 3px on controls</td><td>10px panes, pill buttons, 4px map key</td></tr>
+<tr><th>Map colours, colour-blind check</th><td>Pass on all 28 pairs</td><td>Fails: 3 colours too light for a dark surface, weakest pair below target</td><td>Pass on all 28 pairs</td></tr>
+<tr><th>Main risk</th><td>Can read as plain; relies on type and rules for character</td><td>Dark only, so colours look different from the published light embed</td><td>Fewest rows on screen; pills and soft panes drift toward a consumer look</td></tr>
+</table>
+<p class="note">Not verified by eye: I could not take screenshots of this page, so layout faults in a sample are possible. The colour-blindness results come from a validator run on the hex values, and the contrast ratios under each swatch are computed in this page from the same values.</p>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.js"></script>
+<script>
+"use strict";
+/* ============ tokens: one object per direction; swatches and samples both read it ============ */
+const DIRS = {
+  a: {
+    name: "A · Copy desk", style: "positron",
+    idea: "A newsroom production desk: white sheets, hairline rules, everything flush and tabular. Character comes from the type and the ruled structure, not from decoration.",
+    generic: "The top bar is still a conventional app header. The inspector needs a stronger rhythm between sections than rules alone give it.",
+    fonts: { ui: "'IBM Plex Sans','IBM Plex Sans Arabic',sans-serif", dense: "'IBM Plex Sans Condensed','IBM Plex Sans Arabic',sans-serif", title: "'IBM Plex Sans','IBM Plex Sans Arabic',sans-serif" },
+    fontWhy: "IBM Plex Sans with Plex Sans Arabic: one family drawn for both scripts, with a condensed Latin cut for the feature table and true tabular figures.",
+    radius: { s: "2px", m: "2px", l: "2px", ico: "2px" },
+    t: { bg: "#F3F5F7", panel: "#FFFFFF", sunk: "#E8ECF0", raised: "#FFFFFF", rule: "#DDE3E9", rule2: "#AAB5C0", tx: "#131B23", tx2: "#3B4753", tx3: "#5A6773",
+         brand: "#1B4F93", onBrand: "#FFFFFF", s1: "#0B6E6E", s2: "#8A5A00",
+         ok: "#1A7A46", warn: "#9A5B00", bad: "#B3261E", info: "#1565B0",
+         draft: "#8A5A00", unsaved: "#B8430A", live: "#1A7A46", arch: "#5A6773", guest: "#9B1B6A", ro: "#0E6480", halo: "#FFFFFF" },
+    names: { brand: "Press blue", s1: "Proof teal", s2: "Galley ochre" },
+    cat: ["#963e17", "#0f6fd7", "#cb9c02", "#1bb47b", "#673c97", "#30aaea", "#ca3a9a", "#7b7f1d"],
+    catNames: ["Brick", "Blue", "Ochre", "Green", "Violet", "Sky", "Magenta", "Olive"],
+    mapSurface: "#F2F3F0",
+    catCheck: "Validator: passes on all 28 pairs (weakest colour-blind pair 8.6, target 8; weakest normal-vision pair 15.6, floor 15). Ochre, green and sky are under 3:1 against the basemap, so they always carry an outline or label."
+  },
+  b: {
+    name: "B · Control room", style: "dark",
+    idea: "A broadcast gallery at night: dark slate so the map is the brightest thing in the room, signal-lamp colours for state, condensed capitals on caption bars like equipment labelling.",
+    generic: "Dark with a strong accent is close to a common look; the three working hues and the caption bars are what keep it from that, and they need to stay. The side panel stacks list and style, so a long list pushes style off screen.",
+    fonts: { ui: "'Barlow','Noto Kufi Arabic',sans-serif", dense: "'Barlow Semi Condensed','Noto Kufi Arabic',sans-serif", title: "'Barlow','Noto Kufi Arabic',sans-serif" },
+    fontWhy: "Barlow comes from road-sign and number-plate lettering, which suits a map tool. Noto Kufi Arabic matches its squared, low-contrast forms; Kufi is the style of Arabic signage.",
+    radius: { s: "3px", m: "0px", l: "0px", ico: "50%" },
+    t: { bg: "#1B232D", panel: "#232D39", sunk: "#161D25", raised: "#2D3947", rule: "#3B4859", rule2: "#56657A", tx: "#EAEFF4", tx2: "#B7C2CE", tx3: "#8E9BAA",
+         brand: "#F2A900", onBrand: "#17130A", s1: "#4CC2E0", s2: "#F0719B",
+         ok: "#4CC38A", warn: "#FF8F4A", bad: "#FF6B6B", info: "#6CB4FF",
+         draft: "#C9B26B", unsaved: "#FF8F4A", live: "#4CC38A", arch: "#8E9BAA", guest: "#F0719B", ro: "#6CB4FF", halo: "#161D25" },
+    names: { brand: "Signal amber", s1: "Scope cyan", s2: "Marker rose" },
+    cat: ["#f84840", "#5a90e2", "#ff9713", "#309a7e", "#9c58f9", "#52dafb", "#de5db5", "#97bf6a"],
+    catNames: ["Red", "Blue", "Orange", "Teal", "Violet", "Cyan", "Pink", "Lime"],
+    mapSurface: "#1B232D",
+    catCheck: "Validator: does not pass. Orange, cyan and lime are lighter than the band it allows on a dark surface, and the weakest colour-blind pair (lime and orange) scores 7.5 against a target of 8. All eight clear 3:1 against the basemap. These colours would also need a second set for the light published map."
+  },
+  c: {
+    name: "C · Atlas", style: "positron",
+    idea: "A printed atlas and the newspaper it sits in: a serif for map titles and the key, separate panes on a tinted page, more air. The published map's furniture is treated as typography.",
+    generic: "Rounded panes on a tinted page with pill buttons is the nearest of the three to a generic web app. The serif title and the hard-edged map key are doing most of the work against that.",
+    fonts: { ui: "'Libre Franklin','Noto Sans Arabic',sans-serif", dense: "'Libre Franklin','Noto Sans Arabic',sans-serif", title: "'Newsreader','Noto Naskh Arabic',serif" },
+    fontWhy: "Newsreader was drawn for news text and Libre Franklin revives the classic newspaper sans. Arabic titles use Noto Naskh, the style of Arabic news text, with Noto Sans Arabic for controls.",
+    radius: { s: "6px", m: "8px", l: "10px", ico: "6px" },
+    t: { bg: "#E9EEE8", panel: "#FFFFFF", sunk: "#F1F4EF", raised: "#FFFFFF", rule: "#D3DBD2", rule2: "#A9B6AB", tx: "#17211C", tx2: "#3F4D45", tx3: "#5C6B62",
+         brand: "#1C6B50", onBrand: "#FFFFFF", s1: "#7A3A6C", s2: "#27599A",
+         ok: "#1C6B50", warn: "#935600", bad: "#A8281E", info: "#27599A",
+         draft: "#935600", unsaved: "#B24A12", live: "#1C6B50", arch: "#5C6B62", guest: "#7A3A6C", ro: "#27599A", halo: "#FFFFFF" },
+    names: { brand: "Survey green", s1: "Contour plum", s2: "Bathymetric blue" },
+    cat: ["#b0250f", "#3854c3", "#cfa200", "#136a42", "#863079", "#2fa3e7", "#be639b", "#689339"],
+    catNames: ["Vermilion", "Ultramarine", "Ochre", "Forest", "Plum", "Sky", "Rose", "Moss"],
+    mapSurface: "#EEF1EC",
+    catCheck: "Validator: passes on all 28 pairs (weakest colour-blind pair 8.5, target 8; weakest normal-vision pair 15.9, floor 15). Ochre and sky are under 3:1 against the basemap, so they always carry an outline or label.",
+    dark: {
+      style: "dark", mapTint: { land: "#1A211D", water: "#10181B" },
+      t: { bg: "#151C18", panel: "#1F2924", sunk: "#27332D", raised: "#27332D", rule: "#33413A", rule2: "#56675E", tx: "#E8EEE9", tx2: "#B8C4BC", tx3: "#8F9D95",
+           brand: "#5CC49C", onBrand: "#0C1A14", s1: "#D690C6", s2: "#82B2EC",
+           ok: "#5CC49C", warn: "#E9A54A", bad: "#F27D6E", info: "#82B2EC",
+           draft: "#E9A54A", unsaved: "#F28B50", live: "#5CC49C", arch: "#8F9D95", guest: "#D690C6", ro: "#82B2EC", halo: "#151C18" },
+      cat: ["#d72623", "#5d51fd", "#cd8100", "#087956", "#b02eaf", "#1094ef", "#b37db4", "#63a770"],
+      catNames: ["Vermilion", "Ultramarine", "Ochre", "Forest", "Plum", "Sky", "Mauve", "Moss"],
+      mapSurface: "#1A211D",
+      catCheck: "Validator, dark surface: passes on all 28 pairs (weakest colour-blind pair 9.0, target 8; weakest normal-vision pair 16.0, floor 15), and all eight clear 3:1 against the dark basemap. This is a separate set from the light one: the same eight names, re-stepped for a dark surface. The published map keeps the light set unless the embed is set to dark."
+    }
+  }
+};
+
+/* ============ strings ============ */
+const S = {
+  en: { maps: "Maps", title: "Cyclone Shaheen: track and warnings", save: "Save", preview: "Preview", publish: "Publish", publishCh: "Publish changes",
+    unsaved: "Unsaved", rev: "Rev 48", live: "Live v12", pubAt: "published 14:32", ahead: "Draft ahead of live · 6 changes",
+    select: "Select", area: "Area", line: "Line", arrow: "Arrow", front: "Front line", icon: "Icon", text: "Text", undo: "Undo", redo: "Redo",
+    search: "Search a place or paste coordinates", features: "Features", gWarn: "Warnings", gTrack: "Track", gEv: "Events",
+    red: "Red warning: Al Batinah coast", orange: "Orange warning: Muscat", obs: "Observed track", fc: "Forecast track", cone: "Forecast cone", dirn: "Direction of travel",
+    landfall: "Landfall", flood: "Flooded road, Al Khaburah", shelter: "Shelter, Sohar", evac: "Evacuation line",
+    preset: "Preset", presetV: "Red warning", fill: "Fill", opacity: "Opacity", pattern: "Pattern", none: "None", hatch: "Hatch", cross: "Cross", dots: "Dots",
+    outline: "Outline", width: "Width", dash: "Dash", solid: "Solid", dashed: "Dashed", dotted: "Dotted", label: "Label", from: "From", until: "Until", areaM: "Area", areaV: "4,180 km²",
+    style: "Style", time: "Time", key: "Key", kRed: "Red warning", kOrange: "Orange warning", kCone: "Forecast cone", kObs: "Observed track",
+    play: "Play", now: "3 Oct 2021, 20:00", d1: "1 Oct", d2: "2 Oct", d3: "3 Oct", d4: "4 Oct",
+    ann: "Landfall 3 Oct, 20:00 — winds 120 km/h", count: "11 features", zoom: "Zoom 6.8", labels: "Map labels: Arabic", layers: "Layers", map: "Map", exportT: "Export",
+    f1: "2 Oct 18:00", f2: "4 Oct 06:00", mFlood: "Flooded road", mShelter: "Shelter", sub: "Draft · rev 48 · unsaved" },
+  ar: { maps: "الخرائط", title: "إعصار شاهين: المسار ومناطق التحذير", save: "حفظ", preview: "معاينة", publish: "نشر", publishCh: "نشر التغييرات",
+    unsaved: "غير محفوظ", rev: "المراجعة 48", live: "مباشر · الإصدار 12", pubAt: "نُشر 14:32", ahead: "المسودة تسبق المنشور · 6 تغييرات",
+    select: "تحديد", area: "منطقة", line: "خط", arrow: "سهم", front: "خط تماس", icon: "رمز", text: "نص", undo: "تراجع", redo: "إعادة",
+    search: "ابحث عن مكان أو الصق إحداثيات", features: "العناصر", gWarn: "التحذيرات", gTrack: "المسار", gEv: "الأحداث",
+    red: "تحذير أحمر: ساحل الباطنة", orange: "تحذير برتقالي: مسقط", obs: "المسار المرصود", fc: "المسار المتوقع", cone: "مخروط التوقعات", dirn: "اتجاه الحركة",
+    landfall: "وصول اليابسة", flood: "طريق مغمور، الخابورة", shelter: "مركز إيواء، صحار", evac: "خط الإخلاء",
+    preset: "النمط", presetV: "تحذير أحمر", fill: "التعبئة", opacity: "الشفافية", pattern: "النقش", none: "بلا", hatch: "تهشير", cross: "متقاطع", dots: "نقاط",
+    outline: "الحد", width: "العرض", dash: "التقطيع", solid: "متصل", dashed: "متقطع", dotted: "منقّط", label: "التسمية", from: "من", until: "حتى", areaM: "المساحة", areaV: "4,180 كم²",
+    style: "المظهر", time: "الزمن", key: "المفتاح", kRed: "تحذير أحمر", kOrange: "تحذير برتقالي", kCone: "مخروط التوقعات", kObs: "المسار المرصود",
+    play: "تشغيل", now: "3 أكتوبر 2021، 20:00", d1: "1 أكتوبر", d2: "2 أكتوبر", d3: "3 أكتوبر", d4: "4 أكتوبر",
+    ann: "وصول اليابسة 3 أكتوبر، 20:00 — رياح 120 كم/س", count: "11 عنصرًا", zoom: "التكبير 6.8", labels: "تسميات الخريطة: العربية", layers: "الطبقات", map: "الخريطة", exportT: "تصدير",
+    f1: "2 أكتوبر 18:00", f2: "4 أكتوبر 06:00", mFlood: "طريق مغمور", mShelter: "مركز إيواء", sub: "مسودة · المراجعة 48 · غير محفوظ" }
+};
+
+/* ============ icons ============ */
+const P = {
+  grip: '<circle cx="6" cy="4" r="1"/><circle cx="10" cy="4" r="1"/><circle cx="6" cy="8" r="1"/><circle cx="10" cy="8" r="1"/><circle cx="6" cy="12" r="1"/><circle cx="10" cy="12" r="1"/>',
+  eye: '<path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.8"/>',
+  lock: '<rect x="3.5" y="7" width="9" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+  select: '<path d="M3 2l9.5 5.2-4 1.3-1.6 4L3 2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>',
+  area: '<path d="M3 5l5-2.5 5 3-1.5 7H4.5z" fill="currentColor" fill-opacity=".3" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>',
+  line: '<path d="M2.5 12l4-6 3 3 4-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>',
+  dashl: '<path d="M2.5 12l4-6 3 3 4-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.4 2"/>',
+  arrow: '<path d="M2.5 12.5C4 7 7.5 4.5 12 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M9.5 2.5l3.5 2-2.6 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>',
+  front: '<path d="M1.5 11h13" stroke="currentColor" stroke-width="1.6"/><path d="M3 11l1.8-3.5L6.6 11zM7.2 11L9 7.5l1.8 3.5zM11.2 11L13 7.5V11z"/>',
+  icon: '<circle cx="8" cy="8" r="5.2" fill="currentColor" fill-opacity=".3" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.6"/>',
+  text: '<path d="M3.5 4h9M8 4v9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+  hatch: '<path d="M3 5l5-2.5 5 3-1.5 7H4.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2 1.6"/><path d="M5 10l5-5M6.5 12l5-5" stroke="currentColor" stroke-width="1"/>',
+  wave: '<path d="M1.5 6c1.6-2 3.2 2 4.9 0s3.2 2 4.9 0M1.5 10.5c1.6-2 3.2 2 4.9 0s3.2 2 4.9 0" fill="none" stroke="currentColor" stroke-width="1.5" transform="translate(1.5 0)"/>',
+  house: '<path d="M2.5 8L8 3.2 13.5 8M4.5 7v5.5h7V7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+  sDraft: '<circle cx="6" cy="6" r="4" fill="none" stroke="currentColor" stroke-width="2"/>',
+  sUnsaved: '<path d="M6 1.5L10.5 6 6 10.5 1.5 6z"/>',
+  sLive: '<circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-width="1.2"/>',
+  sArch: '<rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2"/>',
+  sGuest: '<path d="M2.5 1.5h7L6 6l3.5 4.5h-7L6 6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  sRo: '<rect x="2.5" y="5.5" width="7" height="5"/><path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+};
+const ic = (n, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${P[n]}</svg>`;
+const st = (n) => `<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">${P[n]}</svg>`;
+
+/* ============ shared content ============ */
+const ITEMS = [
+  { g: "gWarn", n: 2 },
+  { k: "area", n: "red", c: 0, d: "02/10", sel: 1 },
+  { k: "area", n: "orange", c: 2, d: "02/10" },
+  { g: "gTrack", n: 4 },
+  { k: "line", n: "obs", c: 1, d: "01/10" },
+  { k: "dashl", n: "fc", c: 1, d: "03/10" },
+  { k: "hatch", n: "cone", c: 4, d: "03/10" },
+  { k: "arrow", n: "dirn", c: 1, d: "02/10" },
+  { g: "gEv", n: 4 },
+  { k: "text", n: "landfall", c: 0, d: "03/10" },
+  { k: "icon", n: "flood", c: 5, d: "03/10" },
+  { k: "icon", n: "shelter", c: 3, d: "03/10" },
+  { k: "front", n: "evac", c: 6, d: "03/10" }
+];
+const TOOLS = [["select", "V"], ["area", "A"], ["line", "L"], ["arrow", "W"], ["front", "F"], ["icon", "I"], ["text", "T"]];
+
+function legend(D, L) {
+  const c = D.cat;
+  return `<div class="legend"><h4>${L.key}</h4><ul>
+    <li><span class="lsw" style="--c:${c[0]}"></span>${L.kRed}</li>
+    <li><span class="lsw" style="--c:${c[2]}"></span>${L.kOrange}</li>
+    <li><span class="lsw h" style="--c:${c[4]}"></span>${L.kCone}</li>
+    <li><span class="lsw l" style="--c:${c[1]}"></span>${L.kObs}</li></ul></div>`;
+}
+function timeline(L) {
+  const hs = [20, 35, 30, 55, 70, 95, 80, 100, 60, 45, 30, 20, 15, 10];
+  return `<div class="tl"><button class="play">${L.play}</button><div class="trk"><div class="bars">${hs.map(h => `<i style="height:${h}%"></i>`).join("")}</div><div class="win"></div>
+    ${[L.d1, L.d2, L.d3, L.d4].map((d, i) => `<span class="tick" style="inset-inline-start:${i * 25 + 1}%">${d}</span>`).join("")}</div><span class="now">${L.now}</span></div>`;
+}
+function inspectorRows(D, L, wrap) {
+  const c = D.cat[0];
+  const rows = [
+    [L.preset, `<span class="field"><span class="lsw" style="--c:${c}"></span>${L.presetV}</span>`],
+    [L.fill, `<span class="swatch" style="--c:${c}"></span><span class="field">${c.toUpperCase()}</span>`],
+    [L.opacity, `<span class="rng"></span><span class="field">35%</span>`],
+    [L.pattern, `<span class="seg"><span class="on">${L.none}</span><span>${L.hatch}</span><span>${L.cross}</span><span>${L.dots}</span></span>`],
+    [L.outline, `<span class="swatch" style="--c:${c}"></span><span class="field">2 px</span>`],
+    [L.dash, `<span class="seg"><span class="on">${L.solid}</span><span>${L.dashed}</span><span>${L.dotted}</span></span>`],
+    [L.from, `<span class="field">${L.f1}</span>`],
+    [L.until, `<span class="field">${L.f2}</span>`],
+    [L.areaM, `<span>${L.areaV}</span>`]
+  ];
+  return rows.map(wrap);
+}
+
+/* ============ three layouts ============ */
+function layoutA(D, L) {
+  const fr = ([l, v]) => `<div class="fr"><label>${l}</label><div>${v}</div></div>`;
+  const r = inspectorRows(D, L, fr);
+  return `<div class="top"><span class="wm">livemap</span><span class="crumb">${L.maps} /</span><span class="ttl" dir="auto">${L.title}</span>
+    <span class="seg"><span>LTR</span><span>RTL</span></span><span class="sp"></span>
+    <span class="state" style="--c:var(--unsaved)">${st("sUnsaved")}${L.unsaved} · ${L.rev}</span>
+    <button class="btn">${L.save} <kbd>⌘S</kbd></button><button class="btn">${L.preview}</button>
+    <span class="pubwrap"><span class="live"><span class="state" style="--c:var(--live)">${st("sLive")}${L.live} · ${L.pubAt}</span><span style="color:var(--draft)">${L.ahead}</span></span><span class="pub">${L.publish}</span></span></div>
+  <div class="tools">${TOOLS.map(([t, k], i) => `<span class="tool${i === 0 ? " on" : ""}">${L[t]} <kbd>${k}</kbd></span>`).join("")}
+    <span class="tool">${L.undo} <kbd>⌘Z</kbd></span><span class="tool">${L.redo} <kbd>⇧⌘Z</kbd></span>
+    <span class="field search">${L.search}</span></div>
+  <div class="list"><div class="ph"><span>${L.features}</span><span>11</span></div>
+    ${ITEMS.map(it => it.g ? `<div class="row g"><span>${L[it.g]}</span><span class="dt">${it.n}</span></div>` :
+      `<div class="row${it.sel ? " sel" : ""}"><span class="grip">${ic("grip", 14)}</span><span class="kind" style="--c:${D.cat[it.c]}">${ic(it.k)}</span><span class="nm" dir="auto">${L[it.n]}</span><span class="dt">${it.d}</span><span class="ic">${it.sel ? ic("eye", 14) + ic("lock", 14) : ""}</span></div>`).join("")}</div>
+  <div class="map"><div class="gl"></div>${legend(D, L)}${timeline(L)}</div>
+  <div class="insp"><div class="hd"><small>${L.area}</small><b dir="auto">${L.red}</b></div>
+    <div class="sec">${L.style}</div>${r.slice(0, 6).join("")}<div class="sec">${L.time}</div>${r.slice(6).join("")}</div>
+  <div class="stat"><span>23.8514° N, 57.4388° E</span><span>1 : 2,400,000</span><span>${L.zoom}</span><span>${L.count}</span><span>${L.labels}</span></div>`;
+}
+function layoutB(D, L) {
+  const fr = ([l, v]) => `<div class="fr"><label>${l}</label><div>${v}</div></div>`;
+  const r = inspectorRows(D, L, fr);
+  return `<div class="top"><span class="wm">LM</span><span class="ttl" dir="auto">${L.title}</span><span class="sp"></span>
+    <span class="lamp" style="--c:var(--unsaved)"><i></i>${L.unsaved} · ${L.rev}</span>
+    <span class="lamp" style="--c:var(--live)"><i></i>${L.live}</span>
+    <button class="btn">${L.save} <kbd>⌘S</kbd></button><button class="btn">${L.preview}</button><span class="pub">${L.publishCh}</span></div>
+  <div class="map"><div class="gl"></div><div class="chips"><span>23.8514° N, 57.4388° E</span><span>${L.zoom}</span><span>${L.count}</span></div>${legend(D, L)}
+    <div class="dock">${TOOLS.map(([t, k], i) => `<span class="tool${i === 0 ? " on" : ""}">${ic(t, 16)}${L[t]} <kbd>${k}</kbd></span>`).join("")}</div>${timeline(L)}</div>
+  <div class="side"><div class="tabs"><span class="on">${L.layers}</span><span>${L.map}</span><span>${L.time}</span><span>${L.exportT}</span></div>
+    ${ITEMS.map(it => it.g ? `<div class="cap"><span>${L[it.g]}</span><span>${it.n}</span></div>` :
+      `<div class="row${it.sel ? " sel" : ""}"><span class="kind" style="--c:${D.cat[it.c]}">${ic(it.k)}</span><span class="nm" dir="auto">${L[it.n]}</span><span class="dt">${it.d}</span><span class="ic">${it.sel ? ic("eye", 14) + ic("lock", 14) : ""}</span></div>`).join("")}
+    <div class="cap" style="margin-block-start:6px"><span>${L.style} · ${L.area}</span></div>${r.slice(0, 6).join("")}</div>`;
+}
+function layoutC(D, L) {
+  const fr = ([l, v]) => `<div class="fr"><label>${l}</label><div>${v}</div></div>`;
+  const r = inspectorRows(D, L, fr);
+  return `<div class="top"><span class="wm">livemap</span><div><div class="ttl" dir="auto">${L.title}</div><div class="sub">${L.sub}</div></div><span class="sp"></span>
+    <button class="btn">${L.save}</button><button class="btn">${L.preview}</button>
+    <span class="pubwrap"><span class="live"><span class="state" style="--c:var(--live)">${st("sLive")}${L.live}</span></span><span class="pub">${L.publishCh}</span></span></div>
+  <div class="pane"><div class="ph"><span>${L.features}</span><small>11</small></div>
+    ${ITEMS.map(it => it.g ? `<div class="gh">${L[it.g]}</div>` :
+      `<div class="row${it.sel ? " sel" : ""}"><span class="kind" style="--c:${D.cat[it.c]}">${ic(it.k, 20)}</span><span class="nm" dir="auto">${L[it.n]}</span><span class="dt">${it.d}</span></div>`).join("")}</div>
+  <div class="map"><div class="gl"></div><span class="coords">23.8514° N, 57.4388° E · ${L.zoom}</span>${legend(D, L)}
+    <div class="dock">${TOOLS.map(([t, k], i) => `<span class="tool${i === 0 ? " on" : ""}">${L[t]} <kbd>${k}</kbd></span>`).join("")}</div>${timeline(L)}</div>
+  <div class="pane"><div class="ph"><span dir="auto">${L.presetV}</span><small>${L.area}</small></div>
+    <div class="blk"><h5>${L.style}</h5>${r.slice(0, 6).join("")}</div><div class="blk"><h5>${L.time}</h5>${r.slice(6).join("")}</div></div>`;
+}
+const LAYOUT = { a: layoutA, b: layoutB, c: layoutC };
+
+/* ============ map ============ */
+const bez = (a, c, b, n = 24) => Array.from({ length: n + 1 }, (_, i) => { const t = i / n, u = 1 - t; return [u * u * a[0] + 2 * u * t * c[0] + t * t * b[0], u * u * a[1] + 2 * u * t * c[1] + t * t * b[1]]; });
+function head(p, q, s) { const dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy), ux = dx / l, uy = dy / l; const b = [q[0] - ux * s, q[1] - uy * s]; return [[q, [b[0] - uy * s * .55, b[1] + ux * s * .55], [b[0] + uy * s * .55, b[1] - ux * s * .55], q]]; }
+function teeth(path, step, w, h) { const out = []; for (let i = 0; i < path.length - 1; i++) { const a = path[i], b = path[i + 1], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy), ux = dx / l, uy = dy / l; for (let d = step / 2; d < l - w / 2; d += step) { const m = [a[0] + ux * d, a[1] + uy * d]; out.push([[[m[0] - ux * w / 2, m[1] - uy * w / 2], [m[0] + ux * w / 2, m[1] + uy * w / 2], [m[0] - uy * h, m[1] + ux * h], [m[0] - ux * w / 2, m[1] - uy * w / 2]]]); } } return out; }
+const G = {
+  red: [[56.72, 24.45], [57.12, 24.07], [57.46, 23.95], [57.66, 23.85], [57.92, 23.78], [57.92, 23.5], [57.6, 23.48], [57.35, 23.58], [57.0, 23.72], [56.55, 24.12], [56.72, 24.45]],
+  orange: [[57.92, 23.78], [58.25, 23.78], [58.7, 23.68], [58.85, 23.4], [58.5, 23.25], [58.0, 23.3], [57.92, 23.5], [57.92, 23.78]],
+  cone: [[57.9, 24.05], [57.3, 24.2], [56.3, 23.95], [55.9, 23.45], [56.1, 22.95], [56.9, 23.15], [57.6, 23.55], [57.9, 23.75], [57.9, 24.05]],
+  obs: [[61.6, 24.45], [60.6, 24.3], [59.6, 24.15], [58.7, 24.0], [57.9, 23.9], [57.55, 23.84]],
+  fc: [[57.55, 23.84], [56.9, 23.6], [56.2, 23.3]],
+  evac: [[56.45, 23.9], [56.9, 23.5], [57.45, 23.3], [58.0, 23.12]],
+  arrow: bez([60.9, 24.95], [59.6, 25.15], [58.5, 24.5]),
+  annA: [57.55, 23.84], annB: [58.55, 24.85]
+};
+const F = (geometry, properties = {}) => ({ type: "Feature", geometry, properties });
+const FC = (features) => ({ type: "FeatureCollection", features });
+
+function hatchImage(color) {
+  const c = document.createElement("canvas"); c.width = c.height = 16; const x = c.getContext("2d");
+  x.strokeStyle = color; x.lineWidth = 2; x.beginPath();
+  for (const o of [-16, 0, 16]) { x.moveTo(o, 16); x.lineTo(o + 16, 0); } x.stroke();
+  const d = x.getImageData(0, 0, 16, 16); return { width: 16, height: 16, data: new Uint8Array(d.data.buffer) };
+}
+function mk(map, cls, html, at, anchor = "center", style = "") {
+  const el = document.createElement("div"); el.className = cls; el.innerHTML = html; if (style) el.style.cssText = style;
+  return new maplibregl.Marker({ element: el, anchor }).setLngLat(at).addTo(map);
+}
+function makeMap(el, D, L) {
+  const c = D.cat, T = D.t;
+  const map = new maplibregl.Map({ container: el, style: "https://tiles.openfreemap.org/styles/" + D.style, interactive: false, attributionControl: { compact: true }, bounds: [[55.6, 22.75], [61.9, 25.55]], fitBoundsOptions: { padding: { top: 20, bottom: 80, left: 20, right: 20 } } });
+  map.on("load", () => {
+    const src = (id, data) => map.addSource(id, { type: "geojson", data });
+    const add = (l) => map.addLayer(l);
+    if (D.mapTint) {
+      try { map.setPaintProperty("background", "background-color", D.mapTint.land); } catch (e) { /* layer id differs in this style */ }
+      try { map.setPaintProperty("water", "fill-color", D.mapTint.water); } catch (e) { /* layer id differs in this style */ }
+    }
+    map.addImage("hatch", hatchImage(c[4]));
+    src("orange", F({ type: "Polygon", coordinates: [G.orange] }));
+    src("red", F({ type: "Polygon", coordinates: [G.red] }));
+    src("cone", F({ type: "Polygon", coordinates: [G.cone] }));
+    src("obs", F({ type: "LineString", coordinates: G.obs }));
+    src("fc", F({ type: "LineString", coordinates: G.fc }));
+    src("evac", F({ type: "LineString", coordinates: G.evac }));
+    src("teeth", FC(teeth(G.evac, .13, .08, .06).map(p => F({ type: "Polygon", coordinates: p }))));
+    src("arrow", F({ type: "LineString", coordinates: G.arrow.slice(0, -1) }));
+    src("ahead", F({ type: "Polygon", coordinates: head(G.arrow[G.arrow.length - 3], G.arrow[G.arrow.length - 1], .2) }));
+    src("leader", F({ type: "LineString", coordinates: [G.annA, G.annB] }));
+    src("verts", FC(G.red.slice(0, -1).map(p => F({ type: "Point", coordinates: p }))));
+    add({ id: "cone-f", type: "fill", source: "cone", paint: { "fill-pattern": "hatch", "fill-opacity": .8 } });
+    add({ id: "cone-l", type: "line", source: "cone", paint: { "line-color": c[4], "line-width": 1.5, "line-dasharray": [3, 2] } });
+    add({ id: "orange-f", type: "fill", source: "orange", paint: { "fill-color": c[2], "fill-opacity": .38 } });
+    add({ id: "orange-l", type: "line", source: "orange", paint: { "line-color": c[2], "line-width": 2 } });
+    add({ id: "red-f", type: "fill", source: "red", paint: { "fill-color": c[0], "fill-opacity": .35 } });
+    add({ id: "red-l", type: "line", source: "red", paint: { "line-color": c[0], "line-width": 2 } });
+    add({ id: "evac-l", type: "line", source: "evac", paint: { "line-color": c[6], "line-width": 2.5 } });
+    add({ id: "teeth-f", type: "fill", source: "teeth", paint: { "fill-color": c[6] } });
+    add({ id: "obs-l", type: "line", source: "obs", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": c[1], "line-width": 3 } });
+    add({ id: "fc-l", type: "line", source: "fc", paint: { "line-color": c[1], "line-width": 3, "line-dasharray": [1.6, 1.4] } });
+    add({ id: "arrow-l", type: "line", source: "arrow", layout: { "line-cap": "round" }, paint: { "line-color": c[1], "line-width": 4 } });
+    add({ id: "ahead-f", type: "fill", source: "ahead", paint: { "fill-color": c[1] } });
+    add({ id: "leader-l", type: "line", source: "leader", paint: { "line-color": T.tx, "line-width": 1 } });
+    add({ id: "sel-l", type: "line", source: "red", paint: { "line-color": T.s1, "line-width": 1.5, "line-dasharray": [2, 2], "line-offset": -4 } });
+    add({ id: "verts-c", type: "circle", source: "verts", paint: { "circle-radius": 4.5, "circle-color": T.panel, "circle-stroke-color": T.s1, "circle-stroke-width": 2 } });
+    [[60.6, 24.3], [59.6, 24.15], [58.7, 24.0], G.annA].forEach((p, i) => mk(map, "mk-num", String(i + 1), p, "center", `--c:${c[1]}`));
+    mk(map, "mk-ico", ic("wave", 14), [57.09, 23.97], "center", `--c:${c[5]}`);
+    mk(map, "mk-ico", ic("house", 14), [56.73, 24.34], "center", `--c:${c[3]}`);
+    mk(map, "mk-lab", L.mShelter, [56.73, 24.34], "bottom", "margin-block-start:-14px");
+    mk(map, "mk-ann", `<span dir="auto">${L.ann}</span>`, G.annB, "bottom");
+  });
+  return map;
+}
+
+/* ============ contrast ============ */
+const lum = (h) => { const v = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(x => x <= .03928 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+const cr = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+function sw(name, hex, against, need, onLabel) {
+  const r = cr(hex, against), ink = cr(hex, "#FFFFFF") >= cr(hex, "#111111") ? "#FFFFFF" : "#111111";
+  const verdict = r >= need ? `${r.toFixed(1)}:1 ${onLabel}` : `${r.toFixed(1)}:1 ${onLabel} — below ${need}:1`;
+  return `<div class="c"><div class="chip" style="background:${hex};color:${ink}">Aa</div><div class="m"><b>${name}</b><code>${hex.toUpperCase()}</code><span class="r${r >= need ? "" : " bad"}">${verdict}</span></div></div>`;
+}
+function swatches(D) {
+  const t = D.t, n = D.names, on = "on panel";
+  const grp = (title, items) => `<h3>${title}</h3><div class="sw">${items.join("")}</div>`;
+  return grp("Brand and supporting hues", [sw(n.brand + " — primary actions, publish", t.brand, t.panel, 4.5, on), sw(n.s1 + " — selection, timeline", t.s1, t.panel, 3, on), sw(n.s2 + " — second accent", t.s2, t.panel, 3, on)])
+    + grp("Semantic", [sw("Success", t.ok, t.panel, 4.5, on), sw("Warning", t.warn, t.panel, 4.5, on), sw("Danger", t.bad, t.panel, 4.5, on), sw("Information", t.info, t.panel, 4.5, on)])
+    + grp("Product states (each also has its own shape and word)", [sw("Draft", t.draft, t.panel, 4.5, on), sw("Unsaved", t.unsaved, t.panel, 4.5, on), sw("Live", t.live, t.panel, 4.5, on), sw("Archived", t.arch, t.panel, 4.5, on), sw("Guest", t.guest, t.panel, 4.5, on), sw("Read-only", t.ro, t.panel, 4.5, on)])
+    + grp("Neutrals", [sw("Page", t.bg, t.tx, 4.5, "under text"), sw("Panel", t.panel, t.tx, 4.5, "under text"), sw("Sunken", t.sunk, t.tx, 4.5, "under text"), sw("Rule", t.rule, t.panel, 1, on), sw("Strong rule", t.rule2, t.panel, 1, on), sw("Text", t.tx, t.panel, 4.5, on), sw("Text 2", t.tx2, t.panel, 4.5, on), sw("Text 3", t.tx3, t.panel, 4.5, on)])
+    + grp("Map features — eight categorical colours", D.cat.map((h, i) => sw(D.catNames[i], h, D.mapSurface, 3, "on basemap")))
+    + `<p class="note">${D.catCheck}</p>`;
+}
+
+/* ============ assemble ============ */
+const out = document.getElementById("out");
+const maps = {};
+const ST = { a: { lang: "en", mode: "light" }, b: { lang: "en", mode: "light" }, c: { lang: "en", mode: "light" } };
+const themed = (key, mode) => { const D0 = DIRS[key]; return mode === "dark" && D0.dark ? { ...D0, ...D0.dark } : D0; };
+function render(key, patch) {
+  Object.assign(ST[key], patch);
+  const { lang, mode } = ST[key];
+  const D = themed(key, mode), L = S[lang], t = D.t, f = D.fonts, r = D.radius;
+  const vars = `--bg:${t.bg};--panel:${t.panel};--sunk:${t.sunk};--raised:${t.raised};--rule:${t.rule};--rule2:${t.rule2};--tx:${t.tx};--tx2:${t.tx2};--tx3:${t.tx3};--brand:${t.brand};--on-brand:${t.onBrand};--s1:${t.s1};--s2:${t.s2};--ok:${t.ok};--warn:${t.warn};--bad:${t.bad};--info:${t.info};--draft:${t.draft};--unsaved:${t.unsaved};--live:${t.live};--arch:${t.arch};--guest:${t.guest};--ro:${t.ro};--halo:${t.halo};--f-ui:${f.ui};--f-dense:${f.dense};--f-title:${f.title};--r-s:${r.s};--r-m:${r.m};--r-l:${r.l};--r-ico:${r.ico}`;
+  const frame = document.querySelector(`#${key} .frame`);
+  if (maps[key]) { maps[key].remove(); maps[key] = null; }
+  frame.innerHTML = `<div class="smp smp-${key}" dir="${lang === "ar" ? "rtl" : "ltr"}" lang="${lang}" style="${vars}">${LAYOUT[key](D, L)}</div>`;
+  try { maps[key] = makeMap(frame.querySelector(".gl"), D, L); } catch (e) { frame.querySelector(".gl").textContent = "Map failed to load: " + e.message; }
+  document.querySelectorAll(`#${key} .bar button`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang ? b.dataset.lang === lang : b.dataset.mode === mode)));
+}
+function fit() {
+  document.querySelectorAll(".fit").forEach(w => { const s = w.clientWidth / 1360; w.querySelector(".frame").style.transform = `scale(${s})`; w.style.height = Math.round(800 * s) + "px"; });
+}
+for (const key of ["c", "b", "a"]) {
+  const D = DIRS[key], f = D.fonts;
+  const sec = document.createElement("section"); sec.id = key;
+  sec.innerHTML = `<h2>${D.name} ${D.pick ? '<span class="tag pick">Recommended</span>' : ""}</h2>
+    <p>${D.idea}</p>
+    <div class="bar"><button data-lang="en">LTR · English</button><button data-lang="ar">RTL · Arabic</button>${D.dark ? '<span style="width:16px"></span><button data-mode="light">Light</button><button data-mode="dark">Dark</button>' : ""}</div>
+    <div class="fit"><div class="frame"></div></div>
+    <div class="cols"><div>${D.dark ? "<h2 style='margin-top:20px;font-size:16px'>Light mode palette</h2>" : ""}${swatches(D)}${D.dark ? "<h2 style='margin-top:36px;font-size:16px'>Dark mode palette</h2>" + swatches(themed(key, "dark")) : ""}</div><div>
+      <h3>Type</h3><div class="spec"><div class="l1" style="font-family:${f.title};font-weight:600">Cyclone Shaheen: track and warnings</div>
+      <div class="l1" dir="rtl" style="font-family:${f.title};font-weight:600">إعصار شاهين: المسار ومناطق التحذير</div>
+      <div class="l2" style="font-family:${f.ui}">Red warning: Al Batinah coast · Publish changes · Draft ahead of live</div>
+      <div class="l2" dir="rtl" style="font-family:${f.ui}">تحذير أحمر: ساحل الباطنة · نشر التغييرات · المسودة تسبق المنشور</div>
+      <div class="l3" style="font-family:${f.dense}">23.8514° N, 57.4388° E · 1 : 2,400,000 · Rev 48 · v12 · 4,180 km² · 02/10 18:00</div></div>
+      <p class="note">${D.fontWhy}</p>
+      <h3>What still looks generic</h3><p class="note">${D.generic}</p></div></div>`;
+  out.appendChild(sec);
+  sec.querySelectorAll(".bar button").forEach(b => b.addEventListener("click", () => render(key, b.dataset.lang ? { lang: b.dataset.lang } : { mode: b.dataset.mode })));
+}
+fit();
+for (const key of ["c", "b", "a"]) render(key, {});
+addEventListener("resize", fit);
+</script>
+</body>
+</html>

@@ -1,0 +1,221 @@
+/*
+ * livemap design tokens — direction "Atlas".
+ * The single source for every colour, font, radius, size and shadow.
+ * Components use the Tailwind utilities generated from @theme below, never raw values.
+ * Map layers need resolved colours, so the map code reads the --map-* variables
+ * from this file at runtime instead of keeping a second copy.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ light */
+/* `.light` lets a subtree (an embed preview) stay light inside a dark app. */
+:root,
+.light {
+  /* neutrals: a grey-green tint, never pure grey */
+  --page: #e9eee8;
+  --panel: #ffffff;
+  --well: #f1f4ef;
+  --rule: #d3dbd2;
+  --rule-strong: #a9b6ab;
+  --ink: #17211c;
+  --ink-2: #3f4d45;
+  --ink-3: #5c6b62;
+
+  /* brand and the two supporting hues */
+  --survey: #1c6b50; /* primary actions, publish, selection in lists */
+  --on-survey: #ffffff;
+  --plum: #7a3a6c; /* selection on the map, timeline window, group headings */
+  --bathy: #27599a; /* links, information, read-only */
+
+  /* semantic */
+  --success: #1c6b50;
+  --warning: #935600;
+  --danger: #a8281e;
+  --info: #27599a;
+
+  /* product states; each also has its own shape and word */
+  --state-draft: #935600;
+  --state-unsaved: #b24a12;
+  --state-live: #1c6b50;
+  --state-archived: #5c6b62;
+  --state-guest: #7a3a6c;
+  --state-readonly: #27599a;
+
+  /* map features: eight categorical colours for a light basemap */
+  --map-1: #b0250f; /* vermilion */
+  --map-2: #3854c3; /* ultramarine */
+  --map-3: #cfa200; /* ochre */
+  --map-4: #136a42; /* forest */
+  --map-5: #863079; /* plum */
+  --map-6: #2fa3e7; /* sky */
+  --map-7: #be639b; /* rose */
+  --map-8: #689339; /* moss */
+  --map-land: #eef1ec;
+  --map-water: #c9d9e3;
+  --map-halo: #ffffff;
+
+  --focus: #27599a;
+  --overlay-shadow: rgb(23 33 28 / 0.16);
+  --scrim: rgb(23 33 28 / 0.32); /* the veil behind a dialog or sheet */
+}
+
+/* ------------------------------------------------------------------- dark */
+.dark {
+  --page: #151c18;
+  --panel: #1f2924;
+  --well: #27332d;
+  --rule: #33413a;
+  --rule-strong: #56675e;
+  --ink: #e8eee9;
+  --ink-2: #b8c4bc;
+  --ink-3: #8f9d95;
+
+  --survey: #5cc49c;
+  --on-survey: #0c1a14;
+  --plum: #d690c6;
+  --bathy: #82b2ec;
+
+  --success: #5cc49c;
+  --warning: #e9a54a;
+  --danger: #f27d6e;
+  --info: #82b2ec;
+
+  --state-draft: #e9a54a;
+  --state-unsaved: #f28b50;
+  --state-live: #5cc49c;
+  --state-archived: #8f9d95;
+  --state-guest: #d690c6;
+  --state-readonly: #82b2ec;
+
+  /* the same eight names, re-stepped for a dark basemap */
+  --map-1: #d72623;
+  --map-2: #5d51fd;
+  --map-3: #cd8100;
+  --map-4: #087956;
+  --map-5: #b02eaf;
+  --map-6: #1094ef;
+  --map-7: #b37db4;
+  --map-8: #63a770;
+  --map-land: #1a211d;
+  --map-water: #10181b;
+  --map-halo: #151c18;
+
+  --focus: #82b2ec;
+  --overlay-shadow: rgb(0 0 0 / 0.5);
+  --scrim: rgb(0 0 0 / 0.56);
+}
+
+/* ------------------------------------------------- Tailwind theme mapping */
+@theme inline {
+  /* remove Tailwind's default palette, fonts, radii, shadows and type scale */
+  --color-*: initial;
+  --font-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --text-*: initial;
+
+  --color-page: var(--page);
+  --color-panel: var(--panel);
+  --color-well: var(--well);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-survey: var(--survey);
+  --color-on-survey: var(--on-survey);
+  --color-plum: var(--plum);
+  --color-bathy: var(--bathy);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-state-draft: var(--state-draft);
+  --color-state-unsaved: var(--state-unsaved);
+  --color-state-live: var(--state-live);
+  --color-state-archived: var(--state-archived);
+  --color-state-guest: var(--state-guest);
+  --color-state-readonly: var(--state-readonly);
+  --color-map-1: var(--map-1);
+  --color-map-2: var(--map-2);
+  --color-map-3: var(--map-3);
+  --color-map-4: var(--map-4);
+  --color-map-5: var(--map-5);
+  --color-map-6: var(--map-6);
+  --color-map-7: var(--map-7);
+  --color-map-8: var(--map-8);
+  --color-focus: var(--focus);
+
+  /* states derived from the tokens above, so they follow light, dark and `.light` */
+  --color-survey-hover: color-mix(in oklab, var(--survey) 86%, var(--ink)); /* a primary action under the pointer */
+  --color-survey-pressed: color-mix(in oklab, var(--survey) 72%, var(--ink)); /* a primary action held down */
+  --color-selected: color-mix(in oklab, var(--survey) 11%, var(--panel)); /* the selected row or option; always paired with a mark or weight */
+  --color-danger-wash: color-mix(in oklab, var(--danger) 9%, var(--panel)); /* hover on a destructive action, the fill of an invalid field */
+  --color-scrim: var(--scrim);
+
+  /* type: a news serif for titles and the map key, a newspaper sans for controls */
+  --font-title: "Newsreader Variable", "Noto Naskh Arabic Variable", serif;
+  --font-ui: "Libre Franklin Variable", "Noto Sans Arabic Variable", sans-serif;
+  /* Tailwind's base layer reads --font-sans for the document default */
+  --font-sans: "Libre Franklin Variable", "Noto Sans Arabic Variable", sans-serif;
+
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  --text-2xs: 0.6875rem; /* 11px: captions, key hints */
+  --text-2xs--line-height: 1.3;
+  --text-xs: 0.75rem; /* 12px: dates, secondary */
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.8125rem; /* 13px: controls and list rows, the working size */
+  --text-sm--line-height: 1.35;
+  --text-base: 0.9375rem; /* 15px: reading text, empty states */
+  --text-base--line-height: 1.5;
+  --text-lg: 1.0625rem; /* 17px: pane titles, serif */
+  --text-lg--line-height: 1.3;
+  --text-xl: 1.4375rem; /* 23px: the map title, serif */
+  --text-xl--line-height: 1.2;
+
+  /* radius: shaped by job, not one value everywhere */
+  --radius-none: 0;
+  --radius-key: 4px; /* the map key and title block: printed, hard-edged */
+  --radius-field: 6px; /* inputs, swatches, segmented controls */
+  --radius-block: 8px; /* grouped sections inside a pane, the selected row */
+  --radius-pill: 999px; /* the tool dock, publish control, timeline */
+
+  /* elevation: flat panes; only things that sit over the map are lifted */
+  --shadow-dock: 0 2px 0 var(--rule-strong);
+  --shadow-overlay: 0 8px 24px var(--overlay-shadow); /* the one shadow: menus, popovers, dialogs, sheets */
+
+  /* sizes that set the density */
+  --spacing-row: 2rem; /* 32px feature-list row */
+  --spacing-field: 1.75rem; /* 28px control height */
+  --spacing-dock: 2.25rem; /* 36px tool in the dock */
+  --spacing-topbar: 3.5rem; /* 56px */
+  --spacing-list: 18rem; /* 288px list pane */
+  --spacing-inspector: 19.75rem; /* 316px inspector pane */
+
+  --ease-out-quiet: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@layer base {
+  * {
+    border-color: var(--rule);
+  }
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 0.8125rem;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}

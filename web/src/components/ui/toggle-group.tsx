@@ -1,0 +1,96 @@
+"use client"
+
+import * as React from "react"
+import { type VariantProps } from "class-variance-authority"
+import { cn } from "cn"
+import {
+  ToggleButtonGroup as ToggleGroupPrimitive,
+  ToggleButton as TogglePrimitive,
+  type ToggleButtonGroupProps,
+  type ToggleButtonProps,
+} from "react-aria-components"
+
+import { toggleVariants } from "@/components/ui/toggle"
+
+const ToggleGroupContext = React.createContext<
+  VariantProps<typeof toggleVariants> & {
+    spacing?: number
+    orientation?: "horizontal" | "vertical"
+  }
+>({
+  size: "default",
+  variant: "default",
+  spacing: 2,
+  orientation: "horizontal",
+})
+
+function ToggleGroup({
+  className,
+  variant,
+  size,
+  spacing = 2,
+  orientation = "horizontal",
+  children,
+  ...props
+}: Omit<ToggleButtonGroupProps, "children"> &
+  VariantProps<typeof toggleVariants> & {
+    spacing?: number
+    orientation?: "horizontal" | "vertical"
+    children?: React.ReactNode
+  }) {
+  return (
+    <ToggleGroupPrimitive
+      data-slot="toggle-group"
+      data-variant={variant}
+      data-size={size}
+      data-spacing={spacing}
+      orientation={orientation}
+      style={
+        { "--gap": `calc(var(--spacing) * ${spacing})` } as React.CSSProperties
+      }
+      className={cn(
+        "group/toggle-group flex w-fit flex-row items-center gap-(--gap) data-[spacing=0]:overflow-hidden data-[spacing=0]:rounded-field data-[spacing=0]:border data-[spacing=0]:border-rule-strong data-[spacing=0]:bg-panel data-vertical:flex-col data-vertical:items-stretch",
+        className
+      )}
+      {...props}
+    >
+      <ToggleGroupContext.Provider
+        value={{ variant, size, spacing, orientation }}
+      >
+        {children}
+      </ToggleGroupContext.Provider>
+    </ToggleGroupPrimitive>
+  )
+}
+
+function ToggleGroupItem({
+  className,
+  children,
+  variant = "default",
+  size = "default",
+  ...props
+}: ToggleButtonProps & VariantProps<typeof toggleVariants>) {
+  const context = React.useContext(ToggleGroupContext)
+
+  return (
+    <TogglePrimitive
+      data-slot="toggle-group-item"
+      data-variant={context.variant || variant}
+      data-size={context.size || size}
+      data-spacing={context.spacing}
+      className={cn(
+        "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:border-0 group-data-[spacing=0]/toggle-group:-outline-offset-2 group-data-horizontal/toggle-group:group-data-[spacing=0]/toggle-group:not-first:border-s group-data-horizontal/toggle-group:group-data-[spacing=0]/toggle-group:not-first:border-rule-strong",
+        toggleVariants({
+          variant: context.variant || variant,
+          size: context.size || size,
+        }),
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </TogglePrimitive>
+  )
+}
+
+export { ToggleGroup, ToggleGroupItem }
