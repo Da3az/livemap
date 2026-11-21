@@ -13,13 +13,13 @@
                 text-transform: uppercase; letter-spacing: .06em; margin-block-end: 28px; }
       figure { margin: 32px 0; }
       figcaption { font: 13px ui-sans-serif, system-ui; color: #6b6257; margin-block-start: 8px; }
-      iframe { width: 100%; border: 1px solid #ddd5c9; border-radius: 8px; }
+      iframe { width: 100%; border: 1px solid #ddd5c9; }
       .back { font: 13px ui-sans-serif, system-ui; }
     </style>
   </head>
   <body>
     <div class="col">
-      <p class="back"><a href="/">← demo index</a></p>
+      <p class="back"><a href="/">← livemap</a></p>
       <h1>Fighting spreads east of the river as armoured column advances</h1>
       <p class="byline">Demo article · 7 November 2026</p>
       <p>
@@ -29,7 +29,7 @@
         a dependency on an unmaintained library.
       </p>
       <figure>
-        <iframe id="lm" src="/viewer.html?embedId=demo1&basemap=real&static=1"
+        <iframe id="lm" src="/embed.html?t=demo-news&m=levant-tracker&embedId=demo1&static=1"
                 title="Levant tracker" loading="lazy"
                 sandbox="allow-scripts allow-popups" style="height:460px"></iframe>
         <figcaption>Contested and held areas, front line, and reported incidents.</figcaption>
@@ -41,7 +41,7 @@
       </p>
     </div>
     <script type="module">
-      import { startEmbedParent } from "/dist/embed.js";
+      import { startEmbedParent } from "/embed-host.js";
       startEmbedParent({ id: "demo1", iframe: document.getElementById("lm") });
     </script>
   </body>

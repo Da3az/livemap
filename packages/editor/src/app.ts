@@ -1,6 +1,7 @@
 // One-way flow: input mutates the store, the store emits, renderer and UI re-read.
 
 import { Map as MapLibreMap } from "maplibre-gl";
+import type { MapDoc } from "@livemap/core";
 import { OverlayRenderer, type IconSource } from "@livemap/renderer";
 import { LAYER_IDS } from "@livemap/renderer";
 import { EditorStore } from "./store.js";
@@ -14,8 +15,17 @@ export interface EditorConfig {
   readonly mapId: string;
   readonly style: string | object;
   readonly icons: IconSource;
-  /** Opened by the Preview button. */
-  readonly previewUrl: string;
+  /** Opened by the Preview button. Ignored when `onPreview` is given. */
+  readonly previewUrl?: string;
+  readonly onPreview?: () => void;
+  /**
+   * How requests are sent. A host that authenticates with a bearer token
+   * passes a fetch that adds it; the default is the page's own, which only
+   * reaches an API that needs no credentials.
+   */
+  readonly fetchImpl?: typeof fetch;
+  /** Called when the document is loaded and again whenever it is published. */
+  readonly onDocument?: (doc: MapDoc) => void;
 }
 
 /** Our layers, in the order a click should test them: topmost first. */
@@ -42,6 +52,8 @@ export class EditorApp {
   private drawer!: DrawController;
   private ui!: EditorUI;
   private readonly defaults: ToolDefaults = { ...DEFAULTS };
+  private onKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private destroyed = false;
 
   constructor(private readonly config: EditorConfig) {
     this.map = new MapLibreMap({
@@ -52,7 +64,7 @@ export class EditorApp {
       attributionControl: { compact: true },
     });
 
-    this.store = new EditorStore(config.apiBase, config.mapId);
+    this.store = new EditorStore(config.apiBase, config.mapId, config.fetchImpl);
     this.renderer = new OverlayRenderer(this.map as never, {
       icons: config.icons,
     });
@@ -73,6 +85,9 @@ export class EditorApp {
       this.map.on("idle", ready);
     });
 
+    // The host navigated away while the style was still loading.
+    if (this.destroyed) return;
+
     this.drawer = new DrawController(this.map, this.store, this.defaults);
     this.ui = new EditorUI(
       this.config.root,
@@ -82,8 +97,12 @@ export class EditorApp {
       {
         onSave: () => void this.save(),
         onPublish: () => void this.publish(),
-        onPreview: () =>
-          window.open(this.config.previewUrl, "_blank", "noopener"),
+        onPreview: () => {
+          if (this.config.onPreview) this.config.onPreview();
+          else if (this.config.previewUrl) {
+            window.open(this.config.previewUrl, "_blank", "noopener");
+          }
+        },
         onToggleDir: () => this.toggleDir(),
       },
     );
@@ -109,6 +128,7 @@ export class EditorApp {
           pitch: doc.viewport.pitch,
         });
         this.setDir(doc.uiDir === "rtl" ? "rtl" : "ltr");
+        this.config.onDocument?.(doc);
       }
     } catch (e) {
       this.ui.setMessage(`Could not load the map: ${String(e)}`, "error");
@@ -153,7 +173,7 @@ export class EditorApp {
       n: "annotation",
     };
 
-    window.addEventListener("keydown", (e) => {
+    this.onKeyDown = (e) => {
       const target = e.target as HTMLElement | null;
       // Never steal keys from a text field: typing "a" in an annotation must
       // not switch to the area tool.
@@ -202,14 +222,39 @@ export class EditorApp {
           this.ui.render();
         }
       }
-    });
+    };
+    window.addEventListener("keydown", this.onKeyDown);
+  }
+
+  /** True while there are edits the server has not seen. */
+  get hasUnsavedChanges(): boolean {
+    return this.store.isDirty;
+  }
+
+  /**
+   * Releases everything that outlives the DOM node: the window-level key
+   * handler, the draw controller, and the map with its WebGL context. Inside
+   * a single-page host the editor is torn down on every navigation, and
+   * without this "A" typed on another page would still select the area tool.
+   */
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (this.onKeyDown) window.removeEventListener("keydown", this.onKeyDown);
+    // `drawer` is assigned in start(); a host can tear down before that.
+    (this.drawer as DrawController | undefined)?.destroy();
+    this.map.remove();
   }
 
   // Setting `dir` is the whole mirroring mechanism: editor.css is written in
   // logical properties only, so there are no `[dir]` physical overrides to flip.
+  //
+  // On the editor's own root and nowhere else. It used to be set on <html> as
+  // well, which mirrored whatever page the editor was mounted in — and put the
+  // page's own left-to-right text into a right-to-left context, where its
+  // punctuation jumped to the wrong end of the line.
   private setDir(dir: "ltr" | "rtl"): void {
     this.config.root.dir = dir;
-    document.documentElement.dir = dir;
   }
 
   private toggleDir(): void {
@@ -232,6 +277,8 @@ export class EditorApp {
       this.ui.setMessage(r.error ?? "Publish failed.", "error");
       return;
     }
+    const doc = this.store.document;
+    if (doc) this.config.onDocument?.(doc);
     this.ui.setMessage(
       r.status === "unchanged"
         ? `Nothing changed — still v${r.version}. Readers keep their cached copy.`

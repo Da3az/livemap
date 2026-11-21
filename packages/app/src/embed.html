@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>livemap</title>
+    <link rel="stylesheet" href="/maplibre-gl.css" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #eae6df; }
+      #map { position: absolute; inset: 0; }
+      #note {
+        position: absolute; inset-inline: 0; inset-block-end: 0;
+        padding: 6px 10px; background: #16130f; color: #e8e1d6;
+        font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      #note:empty { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="note"></div>
+    <script type="module" src="/embed.js"></script>
+  </body>
+</html>

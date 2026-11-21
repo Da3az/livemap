@@ -1,143 +1,123 @@
-// Real Fastify API over an in-memory repo seeded with the spike scene, plus the demo pages.
+// The whole application on one port with no database: the real API and the
+// real shell over an in-memory repository.
+//
+//   npm run demo        http://127.0.0.1:8800/
+//
+// Nothing here is a mock of the server. `buildServer` is the same function
+// production calls; only the three things behind its seams are in memory —
+// the repository, the artifact store and the guest provisioner.
 
-import { readFile, mkdir, copyFile, cp } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join, dirname, extname } from "node:path";
+import { randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+
+import {
+  buildServer,
+  MemoryArtifactStore,
+  MemoryGuestProvisioner,
+  MemoryMapRepo,
+  TokenAuth,
+  findTemplate,
+  signSession,
+} from "../packages/api/src/index.ts";
+import { APP_DIST, buildApp } from "../packages/app/build.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(HERE, "..");
 const PORT = Number(process.env.PORT ?? 8800);
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".map": "application/json; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
+// A seeded workspace beside the guests, so there is a published map to embed
+// before anyone has drawn anything.
+const DEMO = {
+  tenantId: "t-demo",
+  tenantSlug: "demo-news",
+  userId: "u-demo",
+  role: "editor",
+  mapId: "m-1",
+  mapSlug: "levant-tracker",
 };
 
-function sh(bin, args, label) {
-  const r = spawnSync(bin, args, { encoding: "utf8", cwd: ROOT });
-  if (r.status !== 0) throw new Error(`${label} failed:\n${r.stderr || r.stdout}`);
-}
-
-async function buildAssets() {
-  const esbuild = join(ROOT, "node_modules", ".bin", "esbuild");
-  await mkdir(join(HERE, "dist"), { recursive: true });
-
-  sh(esbuild, [
-    join(HERE, "app.ts"),
-    "--bundle", "--format=esm", "--platform=browser", "--target=chrome120",
-    "--sourcemap", `--outfile=${join(HERE, "dist", "demo.js")}`,
-  ], "demo bundle");
-
-  sh(esbuild, [
-    join(HERE, "editor-app.ts"),
-    "--bundle", "--format=esm", "--platform=browser", "--target=chrome120",
-    "--sourcemap", `--outfile=${join(HERE, "dist", "editor.js")}`,
-  ], "editor bundle");
-
-  await copyFile(
-    join(ROOT, "packages", "editor", "src", "editor.css"),
-    join(HERE, "dist", "editor.css"),
-  );
-
-  // The embed parent helper, for the article page.
-  sh(esbuild, [
-    join(ROOT, "packages", "viewer", "src", "embed.ts"),
-    "--bundle", "--format=esm", "--platform=browser", "--target=chrome120",
-    `--outfile=${join(HERE, "dist", "embed.js")}`,
-  ], "embed bundle");
-
-  // MapLibre 6 loads its worker as a separate file next to the bundle.
-  await copyFile(
-    join(ROOT, "node_modules", "maplibre-gl", "dist", "maplibre-gl-worker.mjs"),
-    join(HERE, "dist", "maplibre-gl-worker.mjs"),
-  );
-  await copyFile(
-    join(ROOT, "node_modules", "maplibre-gl", "dist", "maplibre-gl.css"),
-    join(HERE, "maplibre-gl.css"),
-  );
-
-  const shots = join(ROOT, "spikes", "shots");
-  if (existsSync(shots)) {
-    await cp(shots, join(HERE, "shots"), { recursive: true });
-  }
-}
-
 async function main() {
-  await buildAssets();
+  await buildApp();
 
-  const { buildServer, StaticAuth, MemoryMapRepo, MemoryArtifactStore } =
-    await import(join(ROOT, "packages", "api", "src", "index.ts"));
-  const { scene, SCENE_CENTER, SCENE_ZOOM } =
-    await import(join(ROOT, "spikes", "scene.ts"));
+  // Fresh each run: a token minted by one run of the demo means nothing to
+  // the next, which is the right lifetime for a secret that is printed below.
+  const secret = randomBytes(32).toString("base64url");
 
   const repo = new MemoryMapRepo();
+  const conflict = findTemplate("conflict-tracker");
   repo.seed(
     {
-      id: "m-1",
-      tenantId: "t-demo",
-      slug: "levant-tracker",
+      id: DEMO.mapId,
+      tenantId: DEMO.tenantId,
+      slug: DEMO.mapSlug,
       title: { value: "Levant tracker", dir: "ltr" },
-      viewport: { center: SCENE_CENTER, zoom: SCENE_ZOOM, bearing: 0, pitch: 0 },
-      basemap: { styleId: "light", labelLangs: ["ar", "en"] },
+      viewport: conflict.viewport,
+      basemap: { styleId: "light", labelLangs: [...conflict.labelLangs] },
       uiDir: "rtl",
       updatedAt: new Date().toISOString(),
       rev: 0,
     },
-    scene,
+    conflict.features,
+    { createdBy: DEMO.userId },
   );
-
-  const store = new MemoryArtifactStore();
-
-  // Serve the demo pages for anything the API does not claim. Passed in rather
-  // than set afterwards: Fastify allows only one not-found handler per prefix.
-  const servePages = async (req, reply) => {
-    const url = (req.url || "/").split("?")[0];
-    if (url === "/favicon.ico") return reply.code(204).send();
-    const rel = url === "/" ? "/index.html" : url;
-    try {
-      const body = await readFile(join(HERE, rel));
-      return reply
-        .header("content-type", MIME[extname(rel)] ?? "application/octet-stream")
-        .header("cache-control", "no-store")
-        .send(body);
-    } catch {
-      return reply.code(404).send({ error: "not_found" });
-    }
-  };
+  repo.grant(DEMO.tenantId, DEMO.userId, DEMO.role);
 
   const app = buildServer({
     repo,
-    store,
-    auth: new StaticAuth({
-      userId: "u-demo",
-      tenantId: "t-demo",
-      tenantSlug: "demo-news",
-      role: "editor",
-    }),
-    notFound: servePages,
+    store: new MemoryArtifactStore(),
+    auth: new TokenAuth(secret),
+    appDir: APP_DIST,
+    servePublic: true,
+    docs: true,
+    guests: {
+      provisioner: new MemoryGuestProvisioner(repo),
+      issueToken: (claims) => signSession(claims, secret),
+    },
   });
+
+  // A stand-in for a publisher's article, to show the embed on a page that is
+  // not this application.
+  app.get("/article.html", { schema: { hide: true } }, async (_req, reply) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .send(await readFile(join(HERE, "article.html"))),
+  );
 
   await app.listen({ port: PORT, host: "127.0.0.1" });
 
-  // Publish v1 so the viewer has something to fetch on first load.
-  const res = await app.inject({ method: "POST", url: "/maps/m-1/publish" });
+  const token = signSession(
+    {
+      userId: DEMO.userId,
+      tenantId: DEMO.tenantId,
+      tenantSlug: DEMO.tenantSlug,
+      role: DEMO.role,
+      exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+    },
+    secret,
+  );
+
+  // Publish v1 so the embed and the versions page have something to show.
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/v1/maps/${DEMO.mapId}/publish`,
+    headers: { authorization: `Bearer ${token}` },
+  });
   const published = res.json();
 
   console.log(`
-  livemap demo
+  livemap
 
-    http://127.0.0.1:${PORT}/
+    http://127.0.0.1:${PORT}/                the application — continue as guest
+    http://127.0.0.1:${PORT}/docs            API reference
+    http://127.0.0.1:${PORT}/article.html    a published map embedded in a page
 
-  published v${published.version}  etag ${published.etag}
-  ${scene.length} features · in-memory repo · press Ctrl-C to stop
+  A seeded workspace with a published map (v${published.version}). Paste this on
+  the sign-in page, or send it as a bearer token:
+
+    ${token}
+
+  In-memory repository · nothing is kept · Ctrl-C to stop
 `);
 }
 

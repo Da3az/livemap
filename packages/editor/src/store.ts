@@ -194,7 +194,7 @@ export class EditorStore {
   }
 
   async load(): Promise<void> {
-    const res = await this.fetchImpl(`${this.apiBase}/maps/${this.mapId}`);
+    const res = await this.fetchImpl(`${this.apiBase}/api/v1/maps/${this.mapId}`);
     if (!res.ok) throw new Error(`load failed: ${res.status}`);
     const body = (await res.json()) as { map: MapDoc; features: MapFeature[] };
 
@@ -217,7 +217,7 @@ export class EditorStore {
     const serverIds = new Set(current.map((f) => f.id));
     const removed = [...this.deletedSinceLoad].filter((id) => !serverIds.has(id));
 
-    const res = await this.fetchImpl(`${this.apiBase}/maps/${this.mapId}/edit`, {
+    const res = await this.fetchImpl(`${this.apiBase}/api/v1/maps/${this.mapId}/edit`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ rev: this.rev, put: current, delete: removed }),
@@ -230,7 +230,7 @@ export class EditorStore {
       };
     }
     if (!res.ok) {
-      return { ok: false, error: `Save failed (${res.status}).` };
+      return { ok: false, error: await refusal(res, "Save failed") };
     }
 
     const body = (await res.json()) as { rev: number };
@@ -250,16 +250,20 @@ export class EditorStore {
     // No content-type header on purpose: Fastify 400s a request that declares
     // JSON and then sends an empty body.
     const res = await this.fetchImpl(
-      `${this.apiBase}/maps/${this.mapId}/publish`,
+      `${this.apiBase}/api/v1/maps/${this.mapId}/publish`,
       { method: "POST" },
     );
+    if (!res.ok) {
+      return { ok: false, error: await refusal(res, "Publish failed") };
+    }
     const body = (await res.json()) as Record<string, unknown>;
 
-    if (res.status === 403) {
-      return { ok: false, error: String(body["reason"] ?? "Not allowed to publish.") };
+    // Kept in step here rather than by reloading: a reload would also reset
+    // the undo history.
+    const version = body["version"];
+    if (this.doc && typeof version === "number") {
+      this.doc = { ...this.doc, publishedVersion: version };
     }
-    if (!res.ok) return { ok: false, error: `Publish failed (${res.status}).` };
-
     this.emit();
     const etag = body["etag"];
     return {
@@ -277,6 +281,28 @@ export class EditorStore {
   markDeleted(id: string): void {
     this.deletedSinceLoad.add(id);
   }
+}
+
+/**
+ * Turns a refusal into a sentence. The server says why in `reason` (a quota,
+ * a role) or `message` (a rejected body), and a rate limit says when to come
+ * back; a bare status code tells an author none of that.
+ */
+async function refusal(res: Response, what: string): Promise<string> {
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    // Not JSON — a proxy's error page. The status is all there is.
+  }
+  if (res.status === 429) {
+    const wait = res.headers.get("retry-after");
+    return wait
+      ? `Too many requests. Try again in ${wait}s.`
+      : "Too many requests. Try again shortly.";
+  }
+  const why = body["reason"] ?? body["message"];
+  return typeof why === "string" ? `${what}: ${why}` : `${what} (${res.status}).`;
 }
 
 let counter = 0;

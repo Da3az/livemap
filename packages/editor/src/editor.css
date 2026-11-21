@@ -1,64 +1,93 @@
-/* Directional properties must stay LOGICAL (`inline-start`, `margin-inline`,
-   never `left`/`margin-left`): `dir="rtl"` then mirrors the whole shell with no
-   second stylesheet and no `[dir]` physical overrides. */
+/* Needs tokens.css loaded first: the palette and the base rules live there so
+   the application shell and the editor cannot drift apart.
 
-:root {
-  --ink: #16130f;
-  --muted: #6b6257;
-  --line: #ddd5c9;
-  --bg: #f7f4ef;
-  --panel: #ffffff;
-  --accent: #b2412f;
-  --danger: #a3271a;
-  --ok: #1f7a4c;
-  --radius: 8px;
-  --panel-w: 310px;
-}
-
-* { box-sizing: border-box; }
-
-html, body {
-  margin: 0;
-  height: 100%;
-  background: var(--bg);
-  color: var(--ink);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
+   Directional properties must stay LOGICAL (`inline-start`, `margin-inline`,
+   never `left`/`margin-left`): `dir="rtl"` then mirrors the whole editor with
+   no second stylesheet and no `[dir]` physical overrides. */
 
 /* Font only, never layout: Arabic needs a stack that has the glyphs. */
-[dir="rtl"] body,
+.editor[dir="rtl"],
 [dir="rtl"] .editor {
   font-family: "Noto Sans Arabic", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* The interface strings are English whichever way the editor is mirrored.
+   Inside a right-to-left context a left-to-right sentence keeps its words in
+   order but its closing full stop is laid out at the far end; `plaintext`
+   takes each one's direction from its own first strong character instead.
+   Layout is untouched — that still follows `dir`. */
+.editor .tool,
+.editor .btn,
+.editor .panel-title,
+.editor .field-label,
+.editor .publish-state,
+.editor .status span {
+  unicode-bidi: plaintext;
 }
 
 .editor {
   display: grid;
   grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "toolbar"
+    "map"
+    "status";
+  height: 100%;
+  min-height: 0;
+}
+/* The side column is part of the layout only while it has content. */
+.editor.has-panel {
   grid-template-columns: 1fr var(--panel-w);
   grid-template-areas:
     "toolbar toolbar"
     "map     panels"
     "status  status";
-  height: 100%;
 }
 
+/* One row, three regions: what to draw, how the next shape will look, what to
+   do with the document. It scrolls sideways before it wraps — two ragged rows
+   of buttons moved the map every time the window changed width. */
 .toolbar {
   grid-area: toolbar;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 18px;
-  padding: 10px 14px;
+  gap: 14px;
+  padding: 6px 10px;
+  overflow-x: auto;
   background: var(--panel);
   border-block-end: 1px solid var(--line);
 }
 
 .tool-group {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+}
+.tool-group.defaults { gap: 8px; min-height: 30px; }
+.tool-group.defaults input[type="number"] { width: 58px; }
+.tool-group.defaults input,
+.tool-group.defaults select {
+  padding: 4px 6px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .tool-group.actions { margin-inline-start: auto; }
+.tool-group.publish {
+  gap: 10px;
+  padding-inline-start: 14px;
+  border-inline-start: 1px solid var(--line);
+}
+.publish-state {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
 
 .group-label {
   font-size: 11px;
@@ -72,7 +101,8 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 11px;
+  padding: 5px 9px;
+  white-space: nowrap;
   font: inherit;
   color: inherit;
   background: #fff;
@@ -95,7 +125,8 @@ html, body {
 }
 
 .btn {
-  padding: 7px 12px;
+  padding: 5px 10px;
+  white-space: nowrap;
   font: inherit;
   background: #fff;
   color: inherit;
@@ -111,6 +142,7 @@ html, body {
   color: #fff;
 }
 .btn-danger { color: var(--danger); border-color: #e4c9c3; }
+.btn.is-on { background: var(--ink); border-color: var(--ink); color: #f7f4ef; }
 
 .map {
   grid-area: map;
@@ -121,15 +153,21 @@ html, body {
 
 .panels {
   grid-area: panels;
-  display: grid;
-  grid-template-rows: 1fr auto;
+  display: none;
+  flex-direction: column;
   min-height: 0;
   background: var(--panel);
   border-inline-start: 1px solid var(--line);
 }
 
-.panel { display: flex; flex-direction: column; min-height: 0; }
-.panel + .panel { border-block-start: 1px solid var(--line); }
+.editor.has-panel .panels { display: flex; }
+
+.panel { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.panel[hidden] { display: none; }
+.panel:not([hidden]) ~ .panel:not([hidden]) {
+  flex: 0 1 auto;
+  border-block-start: 1px solid var(--line);
+}
 
 .panel-title {
   font-size: 11px;
@@ -144,7 +182,7 @@ html, body {
   overflow-y: auto;
   padding: 0 14px 14px;
 }
-.feature-list { max-height: 34vh; }
+.panel:not([hidden]) ~ .panel .feature-list { max-height: 34vh; }
 
 .inspector-head {
   display: flex;
@@ -181,7 +219,7 @@ html, body {
   color: inherit;
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 .field textarea { resize: vertical; }
 .field input[type="range"] { width: 100%; }
@@ -190,13 +228,13 @@ html, body {
 .swatch {
   width: 22px;
   height: 22px;
-  border: 2px solid transparent;
-  border-radius: 5px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 3px;
   cursor: pointer;
   padding: 0;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  outline-offset: 1px;
 }
-.swatch.is-on { border-color: var(--ink); }
+.swatch.is-on { outline: 2px solid var(--ink); }
 
 .toggle {
   display: flex;
@@ -220,13 +258,13 @@ html, body {
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 5px 9px;
   font: inherit;
   color: inherit;
   text-align: start;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 0;
   cursor: pointer;
 }
 .feature-row:hover { background: #f3efe8; }
@@ -234,9 +272,9 @@ html, body {
 .feature-row .dot {
   width: 11px;
   height: 11px;
-  border-radius: 3px;
+  border-radius: 2px;
   flex: none;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(0, 0, 0, 0.18);
 }
 .feature-name {
   flex: 1;
@@ -244,10 +282,6 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.feature-kind { font-size: 11px; color: var(--muted); flex: none; }
-
-.empty { color: var(--muted); font-size: 13px; margin: 6px 0; }
-
 .status {
   grid-area: status;
   display: flex;
@@ -265,8 +299,12 @@ html, body {
 .status .msg { margin-inline-start: auto; }
 .status .msg-error { color: #ff9c8a; }
 
+@media (max-width: 1180px) {
+  .tool kbd { display: none; }
+}
+
 @media (max-width: 900px) {
-  .editor {
+  .editor.has-panel {
     grid-template-columns: 1fr;
     grid-template-areas: "toolbar" "map" "panels" "status";
     grid-template-rows: auto 1fr auto auto;

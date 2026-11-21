@@ -1,0 +1,30 @@
+/* The palette and the base rules, shared by the application shell and the
+   editor. One file, so a colour changed for one is changed for both. */
+
+:root {
+  --ink: #16130f;
+  --muted: #6b6257;
+  --line: #ddd5c9;
+  --bg: #f7f4ef;
+  --panel: #ffffff;
+  /* For the one primary action on a screen and for the active state. Not for
+     decoration: its meaning depends on it being rare. */
+  --accent: #b2412f;
+  --danger: #a3271a;
+  --ok: #1f7a4c;
+  /* Controls only. Anything docked to an edge — a toolbar, a status bar, a
+     table row — is square. */
+  --radius: 4px;
+  --panel-w: 310px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}

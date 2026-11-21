@@ -157,8 +157,12 @@ export class EditorUI {
   private readonly inspector: HTMLElement;
   private readonly featureList: HTMLElement;
   private readonly statusEl: HTMLElement;
+  private readonly inspectorPanel: HTMLElement;
+  private readonly listPanel: HTMLElement;
   private message = "";
   private messageKind: "info" | "error" = "info";
+  /** The feature list is opened by the author; the inspector by a selection. */
+  private listOpen = false;
 
   constructor(
     private readonly root: HTMLElement,
@@ -171,6 +175,8 @@ export class EditorUI {
     this.inspector = root.querySelector(".inspector-body")!;
     this.featureList = root.querySelector(".feature-list")!;
     this.statusEl = root.querySelector(".status")!;
+    this.inspectorPanel = this.inspector.closest<HTMLElement>(".panel")!;
+    this.listPanel = this.featureList.closest<HTMLElement>(".panel")!;
   }
 
   setMessage(text: string, kind: "info" | "error" = "info"): void {
@@ -188,16 +194,29 @@ export class EditorUI {
   }
 
   render(): void {
+    this.syncPanels();
     this.renderToolbar();
     this.renderInspector();
     this.renderFeatureList();
     this.renderStatus();
   }
 
+  /**
+   * The side column exists only while it has something to show. With nothing
+   * selected and the list closed it is absent — not an empty panel explaining
+   * that it is empty — and the map has the full width.
+   */
+  private syncPanels(): void {
+    const selected = this.store.selected !== null;
+    this.inspectorPanel.hidden = !selected;
+    this.listPanel.hidden = !this.listOpen;
+    this.root.classList.toggle("has-panel", selected || this.listOpen);
+  }
+
   private renderToolbar(): void {
     this.toolbar.replaceChildren();
 
-    const tools = el("div", { class: "tool-group" });
+    const tools = el("div", { class: "tool-group tools" });
     for (const t of TOOLS) {
       const active = this.drawer.currentTool === t.id;
       const b = el(
@@ -218,37 +237,45 @@ export class EditorUI {
     }
     this.toolbar.append(tools);
 
-    // Defaults for the next shape drawn, not the selection.
+    // Defaults for the next shape drawn, not the selection — and only the ones
+    // the active tool will use. A stroke width beside the icon tool is a
+    // control that does nothing.
     const d = this.defaults;
-    const next = el("div", { class: "tool-group defaults" }, [
-      el("span", { class: "group-label" }, ["New shape"]),
-    ]);
-    next.append(
-      swatches(d.color, (c) => {
-        d.color = c;
-        this.render();
-      }),
-    );
-    next.append(
-      field(
-        "Width",
-        numberInput(d.strokeWidth, { min: 1, max: 20, step: 0.5 }, (v) => {
-          d.strokeWidth = v;
+    const tool = this.drawer.currentTool;
+    const next = el("div", { class: "tool-group defaults" });
+    const strokes = tool === "line" || tool === "arrow" || tool === "frontline";
+
+    if (tool === "area" || tool === "point" || strokes) {
+      next.append(
+        swatches(d.color, (c) => {
+          d.color = c;
+          this.render();
         }),
-      ),
-    );
-    next.append(
-      field(
-        "Icon",
-        select(
-          d.icon,
-          ICON_CHOICES.map((i) => ({ value: i.id, label: i.label })),
-          (v) => {
-            d.icon = v;
-          },
-        ),
-      ),
-    );
+      );
+    }
+    if (tool === "area" || strokes) {
+      const width = numberInput(
+        d.strokeWidth,
+        { min: 1, max: 20, step: 0.5 },
+        (v) => {
+          d.strokeWidth = v;
+        },
+      );
+      width.title = "Stroke width";
+      width.setAttribute("aria-label", "Stroke width");
+      next.append(width);
+    }
+    if (tool === "point") {
+      const icon = select(
+        d.icon,
+        ICON_CHOICES.map((i) => ({ value: i.id, label: i.label })),
+        (v) => {
+          d.icon = v;
+        },
+      );
+      icon.setAttribute("aria-label", "Icon");
+      next.append(icon);
+    }
     this.toolbar.append(next);
 
     const actions = el("div", { class: "tool-group actions" });
@@ -261,6 +288,21 @@ export class EditorUI {
     redo.disabled = !this.store.canRedo;
     redo.addEventListener("click", () => this.store.redo());
 
+    const count = this.store.list().length;
+    const list = el(
+      "button",
+      {
+        class: `btn${this.listOpen ? " is-on" : ""}`,
+        type: "button",
+        "aria-pressed": this.listOpen,
+      },
+      [`Features ${count}`],
+    );
+    list.addEventListener("click", () => {
+      this.listOpen = !this.listOpen;
+      this.render();
+    });
+
     const dir = el("button", { class: "btn", type: "button", title: "Toggle interface direction" }, ["RTL / LTR"]);
     dir.addEventListener("click", this.hooks.onToggleDir);
 
@@ -270,25 +312,31 @@ export class EditorUI {
     const save = el("button", { class: "btn", type: "button", title: "Save (Ctrl+S)" }, ["Save"]);
     save.addEventListener("click", this.hooks.onSave);
 
+    actions.append(undo, redo, list, dir, preview, save);
+    this.toolbar.append(actions);
+
+    // Publishing is the one action here that changes what readers see, so it
+    // stands apart from the rest, with the state it would change beside it.
+    const version = this.store.document?.publishedVersion;
     const publish = el("button", { class: "btn btn-primary", type: "button" }, ["Publish"]);
     publish.addEventListener("click", this.hooks.onPublish);
-
-    actions.append(undo, redo, dir, preview, save, publish);
-    this.toolbar.append(actions);
+    this.toolbar.append(
+      el("div", { class: "tool-group publish" }, [
+        el("span", { class: "publish-state" }, [
+          version ? `v${version} live` : "not published",
+        ]),
+        publish,
+      ]),
+    );
   }
 
   private renderInspector(): void {
     this.inspector.replaceChildren();
     const f = this.store.selected;
 
-    if (!f) {
-      this.inspector.append(
-        el("p", { class: "empty" }, [
-          "Nothing selected. Pick a tool and draw, or click a shape on the map.",
-        ]),
-      );
-      return;
-    }
+    // Nothing selected: the panel is hidden by `syncPanels`, so there is
+    // nothing to say here.
+    if (!f) return;
 
     this.inspector.append(
       el("div", { class: "inspector-head" }, [
@@ -536,10 +584,7 @@ export class EditorUI {
     this.featureList.replaceChildren();
     const items = this.store.list().reverse(); // topmost first
 
-    if (items.length === 0) {
-      this.featureList.append(el("p", { class: "empty" }, ["No features yet."]));
-      return;
-    }
+    if (!this.listOpen) return;
 
     for (const f of items) {
       const active = this.store.selectedId === f.id;
@@ -562,10 +607,13 @@ export class EditorUI {
           ? f.text.value
           : (f.label?.value ?? KIND_LABEL[f.kind]);
 
+      // The label, or the kind when there is none. Never both: an unlabelled
+      // icon used to read "Icon … Icon".
       const nameEl = el("span", { class: "feature-name" }, [name || KIND_LABEL[f.kind]]);
       if (f.kind === "annotation") nameEl.dir = f.text.dir;
+      else if (f.label) nameEl.dir = f.label.dir;
 
-      row.append(dot, nameEl, el("span", { class: "feature-kind" }, [KIND_LABEL[f.kind]]));
+      row.append(dot, nameEl);
       row.addEventListener("click", () => this.store.select(f.id));
       this.featureList.append(row);
     }
