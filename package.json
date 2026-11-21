@@ -5,14 +5,15 @@
   "description": "Authoring tool for interactive live-event maps",
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "web"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "scripts": {
-    "build": "npm run build -w @livemap/core && npm run build -w @livemap/renderer && npm run build -w @livemap/api && npm run build -w @livemap/viewer && npm run build -w @livemap/editor && npm run build -w @livemap/app",
-    "typecheck": "npm run typecheck -w @livemap/core && npm run typecheck -w @livemap/renderer && npm run typecheck -w @livemap/api && npm run typecheck -w @livemap/viewer && npm run typecheck -w @livemap/editor && npm run typecheck -w @livemap/app",
+    "build": "npm run build -w @livemap/core && npm run build -w @livemap/renderer && npm run build -w @livemap/api && npm run build -w @livemap/viewer && npm run build -w @livemap/editor && npm run build -w @livemap/app && npm run build -w @livemap/web",
+    "typecheck": "npm run typecheck -w @livemap/core && npm run typecheck -w @livemap/renderer && npm run typecheck -w @livemap/api && npm run typecheck -w @livemap/viewer && npm run typecheck -w @livemap/editor && npm run typecheck -w @livemap/app && npm run typecheck -w @livemap/web",
     "test": "npm run test --workspaces --if-present",
     "spike": "node spikes/run.mjs",
     "demo": "node --import tsx demo/server.mjs",
@@ -31,14 +32,14 @@
   },
   "devDependencies": {
     "@fastify/rate-limit": "^11.2.2",
-    "@types/node": "^26.6.6",
+    "@types/node": "24.19.2",
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.2",
     "esbuild": "^0.28.2",
-    "maplibre-gl": "^6.16.0",
-    "playwright-core": "^1.65.0",
+    "maplibre-gl": "6.19.0",
+    "playwright-core": "1.65.1",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "6.0.3"
   },
   "dependencies": {
     "pg": "^8.23.1",

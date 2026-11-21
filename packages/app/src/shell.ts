@@ -38,7 +38,7 @@ export function createShell(session: Session, onSignOut: () => void): Shell {
       el("span", {}, ["Temporary workspace"]),
       session.expiresAt
         ? mono(`expires ${formatDate(session.expiresAt)}`)
-        : null,
+        : "",
       el("span", { class: "spacer" }),
       button(
         "Dismiss",

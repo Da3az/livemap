@@ -81,7 +81,7 @@ export function versionsPage(ctx: Ctx, mapId: string): Page {
         "latest.json",
       ]),
       mono(doc.publishedVersion ? `→ v${doc.publishedVersion}` : "→ nothing published"),
-      doc.publishedVersion ? headerCell(urls.pointer) : null,
+      doc.publishedVersion ? headerCell(urls.pointer) : "",
     );
   };
 
