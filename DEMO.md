@@ -24,15 +24,16 @@ npm run db:down                    # stop the database
 
 | URL | What you get |
 |---|---|
-| `http://127.0.0.1:8800/` | Index, links to everything |
-| `/viewer.html?basemap=real` | The published map on real tiles |
-| `/editor.html?basemap=real` | The authoring tool |
-| `/api-demo.html` | **Click-through API demo — easiest way to show the backend** |
-| `/embed.html` | The map inside a mock news article |
-| `/viewer.html?poll=1&basemap=real` | Viewer with 5-second ETag polling on |
+| `http://127.0.0.1:8800/` | The application: sign in as a guest, or paste the token the demo prints |
+| `/maps` | The workspace — every map, New map, templates |
+| `/maps/<id>` | The editor |
+| `/maps/<id>/versions` | The version ledger, cache headers, rollback, embed code |
+| `/docs` | API reference, generated from the route schemas |
+| `/article.html` | A published map inside a mock news article |
 
-**If you have 10 minutes:** editor → viewer → `/api-demo.html` → the results
-table in [loadtest/RESULTS.md](loadtest/RESULTS.md). Nothing else.
+**If you have 10 minutes:** guest sign-in → new map from a template → publish
+→ the versions page → the results table in
+[loadtest/RESULTS.md](loadtest/RESULTS.md). Nothing else.
 
 ---
 
@@ -131,7 +132,7 @@ not a failure.
 | Port | What |
 |---|---|
 | 5460 | Postgres + PostGIS (Docker) |
-| 8800 | The demo site (`npm run demo`) |
+| 8800 | The application over an in-memory repository (`npm run demo`) |
 | 8801 | The load-test bench server (`npm run bench:serve`) |
 | 8787 | The production-style API (`npm run serve`) |
 
@@ -162,32 +163,41 @@ If you have 15 minutes with an engineer: do **A then B**. Skip the rest.
 npm run demo
 ```
 
-Expected:
+It prints three URLs and a session token for a seeded workspace. This boots the
+**real API** — the same `buildServer()` the production entrypoint uses — and the
+real application shell over an in-memory repository, so Track A needs no
+database at all. Open **http://127.0.0.1:8800/**.
 
-```
-  livemap demo
+### A1. Sign in and the workspace (60 seconds)
 
-    http://127.0.0.1:8800/
+The sign-in page offers **Continue as guest** and a field for a session token.
+Click **Continue as guest**.
 
-  published v1  etag a93fb35ba29154298947e72a0df3e640
-  14 features · in-memory repo · press Ctrl-C to stop
-```
+You land on **Maps**: a table with its column headers and no rows, a usage
+counter reading `0 / 5`, and a strip saying the workspace is temporary and when
+it expires.
 
-This boots the **real API** — the same `buildServer()` the production
-entrypoint uses — over an in-memory repository, so Track A needs no database at
-all. Open **http://127.0.0.1:8800/**.
+**Say this:**
+> That guest is a real tenant. Signup created a tenant, a user and an owner
+> membership, and everything after it goes through the same row-level security
+> as a paying newsroom would. It is rate limited per address, capped in total,
+> and held to quotas — five maps, two thousand features a map — because a
+> public endpoint that writes to a database is a spam target otherwise.
 
-### A1. The viewer (90 seconds)
+Click **New map**. Pick **Conflict tracker**, then **Create**.
 
-Go to **Live viewer** → `/viewer.html?basemap=real`
+### A2. The editor (2 minutes)
 
 You'll see a newsroom scene: a red *Contested* region, a green held region, an
 orange dashed evacuation zone, a black toothed front line, curved red and blue
 movement arrows with chevrons, event icons on coloured discs, and annotations
 in both Arabic and English with leader lines connecting label to anchor.
 
-The status bar at the bottom reads something like
-`v3 · 14 features · etag a93fb35b… · published 10:00:07 PM`.
+The toolbar is one row in three parts. Left: **Select (V), Area (A), Line (L),
+Arrow (R), Front line (F), Icon (I), Note (N)**. Middle: the style controls for
+the active tool only. Right: **Undo, Redo, Features, RTL / LTR, Preview, Save**,
+and set apart from them, the published state and **Publish**. There is no side
+panel until something is selected.
 
 **Say this:**
 > Every shape here is generated geometry, not an icon. There is no permissively
@@ -207,26 +217,17 @@ The status bar at the bottom reads something like
 > floored at 1.01 pixels — MapLibre draws halos per-glyph at 1px or below, which
 > cuts the joins between Arabic letters. There's a test pinning that constant.
 
-### A2. The editor (2 minutes)
-
-Go to **Editor** → `/editor.html?basemap=real`
-
-Toolbar: **Select (V), Area (A), Line (L), Arrow (R), Front line (F), Icon (I),
-Note (N)**, then colour swatches, a width field and an icon dropdown. On the
-right: **Undo, Redo, RTL / LTR, Preview, Save, Publish**. A right-hand panel
-shows an **Inspector** and a **Features** list. A status bar sits at the bottom.
-
 Do this, in order:
 
 1. Press **A**, click three or four points on the map, double-click to close.
-   → a coloured region appears, and the Features list grows.
+   → a coloured region appears.
 2. Press **R**, click three points. → a curved arrow with an arrowhead.
 3. Press **I**, click once. → an event icon on a disc.
-4. Click a shape with **Select (V)** → the Inspector fills with its colour,
+4. Click a shape with **Select (V)** → the Inspector opens with its colour,
    width and label fields. Change the colour; the map updates immediately.
 5. Hit **Undo** twice, then **Redo** once.
-6. Hit **Save** → status shows `saved · rev N`.
-7. Hit **Publish** → status shows `Published v4 · etag 6847254f…`.
+6. Hit **Save** → the status bar shows the new revision.
+7. Hit **Publish** → the state beside the button reads `v1 live`.
 
 **Say this:**
 > Undo isn't a document snapshot. Every edit is a forward/reverse pair, so undo
@@ -237,23 +238,31 @@ Do this, in order:
 
 ### A3. RTL (30 seconds)
 
-Click **RTL / LTR**.
+The map opened right-to-left, because the template says so. Click
+**RTL / LTR**.
 
-The entire shell mirrors. **Say this:**
+The editor mirrors; the application around it does not. **Say this:**
 > There is not a single `[dir="rtl"]` layout override in the stylesheet. It
 > mirrors purely from CSS logical properties. The one direction-specific rule in
 > the whole file is a font choice, not a layout rule.
 
-### A4. The embed (30 seconds)
+### A4. Versions and the embed (60 seconds)
 
-Back to the index → **embed.html**
+Click **Versions** at the top right.
 
-A mock article page with the map in a sandboxed iframe.
+One row per published version: version, ETag, size, feature count, when, by
+whom, and the `Cache-Control` header that version is actually served with —
+read from the artifact by a `HEAD` request, not printed from a constant. Above
+the table, the pointer `latest.json` with its own, much shorter, policy.
+
+Below the table: the embed code and a live preview in a sandboxed iframe.
 
 **Say this:**
 > The iframe reports its height to the parent over postMessage, and the parent
 > validates both the frame identity and the payload shape before trusting it.
 > Validating only one of those is the standard way this becomes an XSS vector.
+
+`/article.html` shows the same embed on a page that is not this application.
 
 ---
 
@@ -269,22 +278,26 @@ This is the part that separates the project from a portfolio CRUD app.
 
 ### B2. Show the publish lifecycle by hand (3 minutes)
 
-With `npm run demo` running, open a second terminal. Every output below is real.
+With `npm run demo` running, open a second terminal. The API needs the session
+token the demo printed for its seeded workspace; published artifacts need
+nothing.
 
 ```bash
 B=http://127.0.0.1:8800
+T='<the token the demo printed>'
+A="Authorization: Bearer $T"
 ```
 
 **Read the map:**
 
 ```bash
-curl -s $B/maps/m-1 | head -c 200
+curl -s -H "$A" $B/api/v1/maps/m-1 | head -c 200
 ```
 
 **Publish when nothing has changed:**
 
 ```bash
-curl -s -X POST $B/maps/m-1/publish
+curl -s -X POST -H "$A" $B/api/v1/maps/m-1/publish
 ```
 ```json
 {"status":"unchanged","version":1,"etag":"a93fb35ba29154298947e72a0df3e640"}
@@ -337,8 +350,8 @@ cache-control: public, max-age=5, stale-while-revalidate=30, stale-if-error=90
 **Optimistic concurrency — the failure that matters:**
 
 ```bash
-curl -s -X POST $B/maps/m-1/edit -H 'content-type: application/json' -d '{"rev":99,"put":[]}'
-curl -s -X POST $B/maps/m-1/edit -H 'content-type: application/json' -d '{"put":[]}'
+curl -s -X POST -H "$A" $B/api/v1/maps/m-1/edit -H 'content-type: application/json' -d '{"rev":99,"put":[]}'
+curl -s -X POST -H "$A" $B/api/v1/maps/m-1/edit -H 'content-type: application/json' -d '{"put":[]}'
 ```
 ```json
 {"error":"stale_revision"}   # 409
@@ -354,7 +367,7 @@ curl -s -X POST $B/maps/m-1/edit -H 'content-type: application/json' -d '{"put":
 **Rollback:**
 
 ```bash
-curl -s -X POST $B/maps/m-1/rollback -H 'content-type: application/json' -d '{"toVersion":1}'
+curl -s -X POST -H "$A" $B/api/v1/maps/m-1/rollback -H 'content-type: application/json' -d '{"toVersion":1}'
 ```
 ```json
 {"status":"rolled_back","version":3}
@@ -364,9 +377,8 @@ curl -s -X POST $B/maps/m-1/rollback -H 'content-type: application/json' -d '{"t
 > is append-only, so the audit trail survives. v3's body and ETag are byte-identical
 > to v1 — same content, new ledger entry.
 
-There's a clickable version of this whole sequence at **`/api-demo.html`** —
-buttons for *GET map*, *Add an incident*, *Publish*, *Publish again (unchanged)*,
-*GET latest.json*, *Roll back to v1*. Use that if you'd rather not type.
+The same sequence is clickable in the application: publish from the editor,
+then roll back from the versions page.
 
 ### B3. The load tests (5 minutes)
 
@@ -599,13 +611,13 @@ output below is real:
 curl -s -w "  <- %{http_code}\n" http://127.0.0.1:8787/health
 # {"ok":true}  <- 200
 
-curl -s -w "  <- %{http_code}\n" http://127.0.0.1:8787/maps/$MAP
+curl -s -w "  <- %{http_code}\n" http://127.0.0.1:8787/api/v1/maps/$MAP
 # {"error":"unauthorised"}  <- 401
 
-curl -s -w "  <- %{http_code}\n" -H "Authorization: Bearer ${TOKEN}x" http://127.0.0.1:8787/maps/$MAP
+curl -s -w "  <- %{http_code}\n" -H "Authorization: Bearer ${TOKEN}x" http://127.0.0.1:8787/api/v1/maps/$MAP
 # {"error":"unauthorised"}  <- 401   (one extra character invalidates the signature)
 
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/maps/$MAP
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/maps/$MAP
 # 200 — title "خريطة الاختبار", dir "rtl", 50 features, straight out of Postgres
 ```
 
@@ -618,7 +630,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/maps/$MAP
 
 ```bash
 for i in $(seq 1 70); do
-  curl -s -o /dev/null -w "%{http_code} " -X POST http://127.0.0.1:8787/maps/$MAP/edit \
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://127.0.0.1:8787/api/v1/maps/$MAP/edit \
     -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"rev":999}'
 done; echo
 # 60 responses get through, then 10 × 429
@@ -828,12 +840,15 @@ Be straightforward about this. The honesty is part of the pitch.
 | MapLibre renderer | **Real.** Verified in headless Chromium. |
 | Publish pipeline — versioning, ETags, rollback, reconciliation | **Real.** 45 tests. |
 | Postgres persistence + row-level security | **Real.** Migration applied, 8 integration tests. |
-| Auth — HMAC bearer tokens | **Real and tested**, but no login flow or identity provider. Tokens minted out of band. |
+| Auth — HMAC bearer tokens | **Real and tested**, but no identity provider. A token comes from guest signup or `npm run mint-token`. |
+| Guest workspaces | **Real.** A Postgres tenant with a 7-day life, rate limited, capped and held to quotas. Removal is `npm run reap-guests`, which must be scheduled. |
+| Application shell — sign-in, workspace, versions, embed | **Real.** Vanilla TypeScript, no framework. |
+| API reference | **Generated** from the route schemas that also validate requests. |
 | Rate limiting, readiness, error handling, graceful shutdown | **Real.** 11 tests. |
 | Viewer — polling, ETags, iframe embed | **Real.** 20 tests. |
 | Load tests | **Real**, and reproducible with one command. |
 | Editor | **Partial.** Draw, restyle, reorder, delete, undo/redo, publish. No vertex reshaping. |
-| Object storage | **Stubbed.** In-process store behind an `ArtifactStore` port. |
+| Object storage | **Written, not yet run against a bucket.** `R2ArtifactStore` behind the `ArtifactStore` port; without `R2_*` set the server falls back to an in-process store and says so. |
 | Billing | **Not built.** |
 | Approval workflow, live feeds | **Schema only.** The tables exist; nothing reads them. |
 

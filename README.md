@@ -126,14 +126,16 @@ packages/core       domain model + annotation geometry. ZERO dependencies. 129 t
 packages/renderer   MapLibre overlay, shared unchanged by editor and viewer. 26 tests.
 packages/api        routes, publish pipeline, PostgresRepo, auth, WS hub. 74 tests.
 packages/viewer     embeddable read-only viewer + ETag polling. 20 tests.
-packages/editor     the authoring application.
+packages/editor     the map editor: tools, inspector, undo, save, publish.
+packages/app        the application shell: sign-in, workspace, versions, embed.
 
-migrations/         0001_init.sql — schema, indexes, RLS policies.
-scripts/            migrate.mjs, serve.mjs (production entrypoint).
+migrations/         0001_init.sql, 0002_role_aware_rls.sql — schema, RLS, roles.
+scripts/            migrate.mjs, serve.mjs (production entrypoint),
+                    reap-guests.mjs, mint-token.mjs.
 bench/              load-test harness: seeder + a server exposing 3 read paths.
 loadtest/           k6 scripts, sweep runner, published results.
 spikes/             headless visual verification + screenshots.
-demo/               local harness that boots all of it.
+demo/               the whole application on one port, no database.
 ```
 
 `core` has zero dependencies and runs in plain Node, which is why the geometry
@@ -147,9 +149,9 @@ editor ──┐
          ├──► renderer ──► MapLibre
 viewer ──┘
 
-editor ──► api ──► MapRepo ──► Postgres          (write path)
-                     │
-                     └──► ArtifactStore ──► CDN ──► viewer   (read path)
+app ──► editor ──► api ──► MapRepo ──► Postgres          (write path)
+                            │
+                            └──► ArtifactStore ──► CDN ──► viewer   (read path)
 ```
 
 ---
@@ -162,13 +164,19 @@ cp .env.example .env
 npm run build
 npm test                 # 249 tests; DB integration tests skip without DATABASE_URL
 npm run spike            # headless render + 18 assertions → spikes/shots/
-npm run demo             # http://127.0.0.1:8800/
+npm run demo             # http://127.0.0.1:8800/ — the application, no database
 
 npm run db:up            # postgis 18-3.7 on 127.0.0.1:5460
 npm run migrate
 npm run migrate:status
 npm run serve            # needs APP_DATABASE_URL + SESSION_SECRET
+npm run mint-token -- <tenant-slug> <user-email>   # a token to sign in with
+npm run reap-guests -- --dry-run                   # expired guest workspaces
 ```
+
+`npm run serve` serves the application at `/`, the JSON API under `/api/v1` and
+its generated reference at `/docs`. Guest signup is off until `GUEST_SIGNUP=on`;
+`.env.example` documents the rate limits, quotas and bot check that go with it.
 
 Requires Node ≥ 18 and Docker for the database. The toolchain is **esbuild, not
 Vite** — Vite 8 needs Node ≥ 20.19 and this was built against 20.18.
@@ -186,16 +194,19 @@ the HTTP surface, the embeddable viewer, Postgres persistence with row-level
 security, HMAC session auth, rate limiting and readiness probes, and the load
 tests above.
 
+**Built:** the application around them — guest workspaces, map lifecycle,
+per-tenant quotas, request validation with a generated API reference, and an
+R2 artifact store. The R2 store has not yet been run against a real bucket.
+
 **Not built:**
 
-- **Object storage.** Artifacts live in an in-process store. Production wants
-  S3/R2 behind a CDN — one `ArtifactStore` implementation, nothing above it
-  changes.
-- **An identity provider.** `TokenAuth` is real and tested, but tokens are
-  minted out of band. No login flow, no OIDC, no password storage. A
-  half-written auth system is worse than an honest seam.
-- **The editor application is incomplete.** You can draw, restyle, reorder and
-  delete; reshaping an existing shape means redrawing it.
+- **An identity provider.** `TokenAuth` is real and tested, but a token comes
+  from guest signup or is minted by a script. No accounts, no OIDC, no password
+  storage. A half-written auth system is worse than an honest seam.
+- **A scheduler.** Expired guest workspaces are removed by
+  `scripts/reap-guests.mjs`, which something outside the server has to run.
+- **Vertex editing.** You can draw, restyle, reorder and delete; reshaping an
+  existing shape means redrawing it.
 - Billing. Icon de-confliction at low zoom. Labels avoiding geometry.
 - `publish_requests` and `feeds` exist in the schema but nothing reads them yet.
 

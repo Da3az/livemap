@@ -80,7 +80,8 @@ readers keep their cached copy.
 | `@livemap/core` | **nothing** | Domain model + annotation geometry. Pure, Node-testable. **6.6 KiB min+gzip.** |
 | `@livemap/renderer` | core, (MapLibre structurally) | Builds MapLibre sources/layers. Shared *unchanged* by editor and viewer. |
 | `@livemap/api` | core | Fastify + Postgres + publish pipeline. |
-| `@livemap/editor` | core, renderer | The authoring SPA. |
+| `@livemap/editor` | core, renderer | The map editor: tools, inspector, undo, save, publish. Mounted by a host. |
+| `@livemap/app` | core, renderer, editor, viewer | The application shell: sign-in, workspace, editor chrome, version ledger, embed page. |
 | `@livemap/viewer` | core, renderer | The embeddable read-only viewer. |
 
 **`core` has zero dependencies on purpose.** The geodesy, spline and
@@ -211,16 +212,27 @@ Stated plainly rather than discovered later:
    north-up, but it is a choice rather than an accident.
 6. **No tile-performance measurement yet.** The PMTiles cold-start figure in
    `findings.md` is still someone else's number.
-7. **`AdminDb` has no operations on it.** It is pool wiring plus a connection
-   assertion. There is no identity provider, so there is no way to authenticate
-   a platform operator and no honest place to put a check above it. Scripts
-   still hold their own provisioning SQL; §8 has the role split.
+7. **`AdminDb` has one caller and no operator surface.** Guest signup reaches
+   it through `GuestProvisioner`, two operations that take no caller input
+   (§9). There is still no identity provider, so there is no way to
+   authenticate a platform operator and no honest place to put a general check
+   above it. Scripts hold their own provisioning SQL; §8 has the role split.
 8. **No approval workflow.** `publish_requests` has policies — a contributor may
    insert, a publishing role may decide — but nothing reads the table. The
    `publish:request` capability is granted and currently leads nowhere.
-9. **Nothing writes `maps.created_by` from the application.** Row ownership is
-   enforced, but maps are only ever created by the admin path, so the `maps`
-   insert policy has no production call site yet.
+9. **Guest workspaces are reaped by a script nothing schedules.**
+   `scripts/reap-guests.mjs` has to be run from outside. Until it is, expired
+   guests count against `MAX_GUESTS`, and at that ceiling signup answers 503 —
+   a bound on the damage, not a substitute for the schedule.
+10. **The R2 store has not met a real bucket.** Its requests are tested against
+    a stub and its contract suite skips without credentials. The bucket also
+    needs a CORS rule the code cannot set: `GET` from any origin, request
+    headers `cache-control` and `if-none-match`, `etag` exposed.
+11. **Rate limits are per process.** The limiter's store is in memory, which is
+    right for one instance and wrong for two.
+12. **No Content-Security-Policy on the application shell.** It needs writing
+    against a running browser: MapLibre's worker, the tile host and the bot
+    check each need an allowance, and a wrong one fails silently.
 
 ## 7. Build requirements worth knowing
 
@@ -333,3 +345,89 @@ need not satisfy the maps update policy, since publishing writes the ledger, not
 the map. The same rule is why `applyEdit` reads the map with a plain `select`:
 under `FOR UPDATE`, a row an ownership policy refuses would come back empty and
 be reported as "no such map" instead of as forbidden.
+
+## 9. The application surface
+
+### One origin, three kinds of URL
+
+```
+/  /maps  /maps/:id  /maps/:id/versions     pages — the shell's client router
+/embed.html                                 the read-only page inside an iframe
+/api/v1/*                                   the JSON API
+/auth/guest  /config  /health  /ready       public, outside the API
+/docs                                       reference, generated from the routes
+/public/*                                   artifacts — local development only
+```
+
+The API is a Fastify child scope with the auth hook attached to the scope, not
+to the server. Everything under the prefix is denied by default, unknown paths
+included; nothing outside it needs an allowlist entry to be reachable. The
+earlier arrangement was one global hook and a set of exempt paths, which
+refused `/health?t=1` because it compared the raw URL.
+
+A page request that matches no file gets `index.html`; a miss under `/api/v1`
+is always JSON; a missing asset is a 404 rather than the shell with the wrong
+content type.
+
+### The role comes from the database on every request
+
+The token says who is calling. `memberships` says what they may do, and whether
+they are still anyone: one primary-key lookup per API request. A token that
+outlives a demotion gets the demoted role's answers, and a guest's token that
+outlives its reaped workspace gets a 401 although its signature still verifies.
+This is the application-side twin of `livemap_granted_role()` in §8.
+
+### Guest workspaces
+
+A guest is a real tenant: a row in `tenants` with a `guest-` slug, a user, and
+an `owner` membership, created in one transaction by the `livemap_admin` role.
+That is the only thing done across the tenant boundary. The map a guest then
+creates goes through `PostgresRepo` and the `maps` insert policy like anyone
+else's.
+
+The slug prefix is the marker, not a column: `tenants.created_at` already gives
+the reaper its cutoff.
+
+### What stands in front of a public write
+
+In the order a signup meets them:
+
+1. A rate limit per address.
+2. A human check (Cloudflare Turnstile), redeemed server-side. It fails closed:
+   no token, a rejected token, a timeout and an outage all refuse.
+3. A ceiling on how many guest tenants may exist, expired ones included.
+
+And after it, for as long as the workspace lives: quotas on maps, on features
+per map, on published versions per map and on request size, each enforced
+inside the transaction that would exceed it, plus a rate tier per kind of cost
+(publish, write, read, rejected credentials).
+
+An edit past the feature limit is refused whole. The count is taken after the
+write, because only the table knows whether a put replaced a row or added one,
+and the transaction is abandoned if it is over.
+
+### Validation and the reference are one thing
+
+Request shapes are JSON Schema in `packages/api/src/schemas.ts`. Fastify
+validates against them, and `/docs` is generated from them, so the reference
+cannot describe a request the server would refuse.
+
+The validator is configured to refuse rather than repair. Fastify's defaults
+remove properties a schema does not name and coerce `"5"` to `5`; both are off.
+
+The feature schema is a second copy of `core`'s TypeScript types, which have no
+runtime form. A test runs every template feature through it.
+
+### Artifacts on R2
+
+`R2ArtifactStore` is the `ArtifactStore` for production. Two things differ from
+the in-memory store, both deliberate:
+
+- **The served ETag is R2's, not ours.** Ours is a hash of the map's content
+  and is kept as object metadata. The viewer echoes whatever validator it was
+  given and decides whether to re-render from the pointer's version number, so
+  it does not need them to match.
+- **The server stops serving artifacts.** With R2 configured `/public/*` is not
+  registered: it would be an unauthenticated proxy onto the bucket, on the
+  process that holds the database pool. The read path not touching the
+  database is then a property of the deployment, not a convention.
