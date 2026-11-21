@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildServer, StaticAuth, MemoryMapRepo, MemoryArtifactStore } from "../src/index.js";
 import type { MapRepo } from "../src/repo.js";
 
@@ -44,9 +47,9 @@ test("/ready returns 503 when the dependency is down", async () => {
   await app.close();
 });
 
-test("every other route still requires a token", async () => {
+test("every API route still requires a token", async () => {
   const app = buildServer(deps({ auth: new StaticAuth(null) }));
-  const res = await app.inject({ method: "GET", url: "/maps/m1" });
+  const res = await app.inject({ method: "GET", url: "/api/v1/maps/m1" });
   assert.equal(res.statusCode, 401);
   await app.close();
 });
@@ -74,28 +77,27 @@ test("a caller can supply the not-found handler to serve static pages", async ()
   assert.equal(res.statusCode, 200);
   assert.match(res.body, /page \/index\.html/);
 
-  // Real routes still win over the fallback.
-  const api = await app.inject({ method: "GET", url: "/maps/nope" });
-  assert.equal(api.statusCode, 404);
-  assert.deepEqual(api.json(), { error: "not_found" });
+  // Real routes still win over the fallback, and so does the whole API
+  // prefix: a miss under it is JSON, never a page.
+  for (const url of ["/api/v1/maps/nope", "/api/v1/nope"]) {
+    const api = await app.inject({ method: "GET", url });
+    assert.equal(api.statusCode, 404, url);
+    assert.deepEqual(api.json(), { error: "not_found" });
+  }
   await app.close();
 });
 
 test("a repository failure becomes a 500 with no internals leaked", async () => {
-  const exploding: MapRepo = {
+  // A real repo with one method replaced, so the stub does not have to restate
+  // an interface it is not about.
+  const exploding: MapRepo = Object.assign(new MemoryMapRepo(), {
     getMap: async () => {
       throw new Error("connection to 10.0.0.5:5432 refused for user livemap_app");
     },
-    listFeatures: async () => [],
-    applyEdit: async () => ({ status: "not_found" }),
-    loadForPublish: async () => null,
-    recordNextVersion: async () => null,
-    getLatestVersion: async () => null,
-    setPublishedVersion: async () => {},
-  };
+  });
 
   const app = buildServer(deps({ repo: exploding }));
-  const res = await app.inject({ method: "GET", url: "/maps/m1" });
+  const res = await app.inject({ method: "GET", url: "/api/v1/maps/m1" });
 
   assert.equal(res.statusCode, 500);
   const body = res.json();
@@ -110,19 +112,19 @@ test("a repository failure becomes a 500 with no internals leaked", async () => 
 });
 
 test("an inbound x-request-id is honoured so a trace survives a proxy", async () => {
-  const app = buildServer(deps({ repo: {
-    getMap: async () => { throw new Error("boom"); },
-    listFeatures: async () => [],
-    applyEdit: async () => ({ status: "not_found" }),
-    loadForPublish: async () => null,
-    recordNextVersion: async () => null,
-    getLatestVersion: async () => null,
-    setPublishedVersion: async () => {},
-  } as MapRepo }));
+  const app = buildServer(
+    deps({
+      repo: Object.assign(new MemoryMapRepo(), {
+        getMap: async () => {
+          throw new Error("boom");
+        },
+      }),
+    }),
+  );
 
   const res = await app.inject({
     method: "GET",
-    url: "/maps/m1",
+    url: "/api/v1/maps/m1",
     headers: { "x-request-id": "trace-abc-123" },
   });
   assert.equal(res.json().reqId, "trace-abc-123");
@@ -133,7 +135,7 @@ test("an oversized edit body is rejected rather than serialised", async () => {
   const app = buildServer(deps({ bodyLimit: 1024 }));
   const res = await app.inject({
     method: "POST",
-    url: "/maps/m1/edit",
+    url: "/api/v1/maps/m1/edit",
     payload: { rev: 0, put: [], pad: "x".repeat(4096) },
   });
   assert.equal(res.statusCode, 413);
@@ -141,14 +143,14 @@ test("an oversized edit body is rejected rather than serialised", async () => {
 });
 
 test("writes are rate limited per actor once configured", async () => {
-  const app = buildServer(deps({ rateLimit: { max: 3, timeWindow: "1 minute" } }));
+  const app = buildServer(deps({ rateLimit: { write: { max: 3, timeWindow: "1 minute" } } }));
   await app.ready();
 
   const codes = [];
   for (let i = 0; i < 5; i++) {
     const res = await app.inject({
       method: "POST",
-      url: "/maps/m1/edit",
+      url: "/api/v1/maps/m1/edit",
       payload: { rev: 0 },
     });
     codes.push(res.statusCode);
@@ -160,13 +162,72 @@ test("writes are rate limited per actor once configured", async () => {
   await app.close();
 });
 
-test("reads are not rate limited — the CDN absorbs them", async () => {
-  const app = buildServer(deps({ rateLimit: { max: 2, timeWindow: "1 minute" } }));
+test("reads are not counted against the write tier", async () => {
+  const app = buildServer(
+    deps({ rateLimit: { write: { max: 2, timeWindow: "1 minute" } } }),
+  );
   await app.ready();
 
   for (let i = 0; i < 6; i++) {
-    const res = await app.inject({ method: "GET", url: "/maps/m1" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/maps/m1" });
     assert.notEqual(res.statusCode, 429);
   }
+  await app.close();
+});
+
+test("with an app directory, page routes get the shell and everything else stays honest", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "livemap-app-"));
+  await writeFile(join(dir, "index.html"), "<!doctype html><title>shell</title>");
+  await writeFile(join(dir, "app.js"), "export {};");
+  await writeFile(join(dir, "embed.html"), "<!doctype html><title>embed</title>");
+
+  const app = buildServer(deps({ appDir: dir, auth: new StaticAuth(null) }));
+  try {
+    // A deep link or a refresh lands in the client router, not on a 404.
+    for (const url of ["/", "/maps", "/maps/abc/versions?x=1"]) {
+      const res = await app.inject({ method: "GET", url });
+      assert.equal(res.statusCode, 200, url);
+      assert.match(res.body, /<title>shell<\/title>/, url);
+      // The shell must not be framed, and must be revalidated on every load.
+      assert.equal(res.headers["x-frame-options"], "DENY", url);
+      assert.equal(res.headers["cache-control"], "no-cache", url);
+    }
+
+    const asset = await app.inject({ method: "GET", url: "/app.js" });
+    assert.equal(asset.statusCode, 200);
+    // Loaded by the embed page from a sandboxed frame, which is cross-origin.
+    assert.equal(asset.headers["access-control-allow-origin"], "*");
+
+    // The embed page is the one document that has to be frameable.
+    const embed = await app.inject({ method: "GET", url: "/embed.html" });
+    assert.equal(embed.statusCode, 200);
+    assert.equal(embed.headers["x-frame-options"], undefined);
+
+    // A missing asset is a 404, not the shell with a 200 and the wrong type.
+    const missing = await app.inject({ method: "GET", url: "/gone.js" });
+    assert.equal(missing.statusCode, 404);
+
+    // The API keeps its own answers: JSON, and 401 before anything else.
+    const api = await app.inject({ method: "GET", url: "/api/v1/maps" });
+    assert.equal(api.statusCode, 401);
+    assert.deepEqual(api.json(), { error: "unauthorised" });
+
+    const post = await app.inject({ method: "POST", url: "/maps" });
+    assert.equal(post.statusCode, 404);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("/config tells a page what it needs before it has a session", async () => {
+  const app = buildServer(deps({ auth: new StaticAuth(null) }));
+  const res = await app.inject({ method: "GET", url: "/config" });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), {
+    artifactBase: "/public",
+    guestSignup: false,
+    humanCheckSiteKey: null,
+  });
   await app.close();
 });

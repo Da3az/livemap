@@ -72,8 +72,8 @@ export function verifySession(
  * Bearer-token resolver. The claims carry the tenant, so every downstream
  * query is scoped by something the client cannot alter without the secret.
  *
- * Not an identity provider: tokens are minted out of band by
- * `scripts/mint-token.mjs`. Swapping in OIDC means replacing this class only,
+ * Not an identity provider: a token comes from guest signup or is minted out
+ * of band by `scripts/mint-token.mjs`. Swapping in OIDC means replacing this class only,
  * because the rest of the server depends on `AuthResolver`.
  */
 export class TokenAuth implements AuthResolver {
@@ -98,6 +98,7 @@ export class TokenAuth implements AuthResolver {
       tenantId: out.claims.tenantId,
       tenantSlug: out.claims.tenantSlug,
       role: out.claims.role,
+      expiresAt: out.claims.exp,
     };
   }
 }

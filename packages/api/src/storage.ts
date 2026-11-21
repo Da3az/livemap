@@ -19,6 +19,11 @@ export interface ArtifactStore {
   /** Used by the reconciliation sweep to find orphaned version rows. */
   has(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
+  /**
+   * Removes every object under a prefix and returns how many. For reaping a
+   * tenant: its artifacts are public, so they have to go when it does.
+   */
+  deletePrefix(prefix: string): Promise<number>;
 }
 
 export class MemoryArtifactStore implements ArtifactStore {
@@ -47,6 +52,17 @@ export class MemoryArtifactStore implements ArtifactStore {
   async delete(key: string): Promise<void> {
     this.objects.delete(key);
     this.writeLog.push(`DELETE ${key}`);
+  }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!prefix) throw new Error("deletePrefix needs a non-empty prefix");
+    let n = 0;
+    for (const key of [...this.objects.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      await this.delete(key);
+      n++;
+    }
+    return n;
   }
 
   get size(): number {
@@ -78,6 +94,9 @@ export class FailingArtifactStore implements ArtifactStore {
   delete(key: string): Promise<void> {
     return this.inner.delete(key);
   }
+  deletePrefix(prefix: string): Promise<number> {
+    return this.inner.deletePrefix(prefix);
+  }
 }
 
 /** Object key layout. Kept in one place so the CDN config can mirror it. */
@@ -86,4 +105,6 @@ export const keys = {
     `t/${tenantSlug}/m/${mapSlug}/v/${version}.json`,
   pointer: (tenantSlug: string, mapSlug: string): string =>
     `t/${tenantSlug}/m/${mapSlug}/latest.json`,
+  /** Everything a tenant has ever published. Trailing slash, so `t/ab` never matches `t/abc`. */
+  tenant: (tenantSlug: string): string => `t/${tenantSlug}/`,
 };

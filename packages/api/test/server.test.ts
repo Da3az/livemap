@@ -49,7 +49,12 @@ function setup(
     actor === undefined
       ? { userId: "u-1", tenantId: TENANT, tenantSlug: TENANT_SLUG, role }
       : actor;
-  const app = buildServer({ repo, store, auth: new StaticAuth(resolved) });
+  const app = buildServer({
+    repo,
+    store,
+    auth: new StaticAuth(resolved),
+    servePublic: true,
+  });
   return { app, repo, store };
 }
 
@@ -61,16 +66,76 @@ describe("auth", () => {
     await app.close();
   });
 
-  test("everything else is 401 without an actor", async () => {
+  test("health ignores a query string", async () => {
+    // The old allowlist matched the raw URL, so a probe with a cache-buster
+    // was treated as an API call and refused.
+    const { app } = setup("editor", null);
+    const res = await app.inject({ method: "GET", url: "/health?t=1" });
+    assert.equal(res.statusCode, 200);
+    await app.close();
+  });
+
+  test("everything under the API prefix is 401 without an actor", async () => {
     const { app } = setup("editor", null);
     for (const url of [
-      `/maps/${MAP_ID}`,
-      `/maps/${MAP_ID}/edit`,
-      `/maps/${MAP_ID}/publish`,
+      `/api/v1/maps/${MAP_ID}`,
+      `/api/v1/maps/${MAP_ID}/edit`,
+      `/api/v1/maps/${MAP_ID}/publish`,
+      // Unknown paths too: an anonymous caller must not be able to map the API
+      // by telling 404 from 401.
+      "/api/v1/nope",
     ]) {
       const res = await app.inject({ method: "GET", url });
       assert.equal(res.statusCode, 401, url);
     }
+    await app.close();
+  });
+
+  test("an unknown API path is a JSON 404 once authenticated", async () => {
+    const { app } = setup();
+    const res = await app.inject({ method: "GET", url: "/api/v1/nope" });
+    assert.equal(res.statusCode, 404);
+    assert.deepEqual(res.json(), { error: "not_found" });
+    await app.close();
+  });
+
+  test("published artifacts need no actor", async () => {
+    // Publish as an editor, then read with a server that resolves nobody. The
+    // store is shared; only the auth differs.
+    const { app, repo, store } = setup();
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
+    await app.close();
+
+    const anon = buildServer({
+      repo,
+      store,
+      auth: new StaticAuth(null),
+      servePublic: true,
+    });
+    const res = await anon.inject({
+      method: "GET",
+      url: `/public/${keys.pointer(TENANT_SLUG, DOC.slug)}`,
+    });
+    assert.equal(res.statusCode, 200);
+    await anon.close();
+  });
+
+  test("the artifact route is absent unless asked for", async () => {
+    // Production serves artifacts from the CDN. Left on, this route would be an
+    // open proxy onto the bucket.
+    const repo = new MemoryMapRepo();
+    const store = new MemoryArtifactStore();
+    await store.put("t/x/m/y/latest.json", "{}", {
+      contentType: "application/json",
+      cacheControl: "max-age=5",
+      etag: '"e"',
+    });
+    const app = buildServer({ repo, store, auth: new StaticAuth(null) });
+    const res = await app.inject({
+      method: "GET",
+      url: "/public/t/x/m/y/latest.json",
+    });
+    assert.equal(res.statusCode, 404);
     await app.close();
   });
 });
@@ -78,7 +143,7 @@ describe("auth", () => {
 describe("GET /maps/:id", () => {
   test("returns the document and its features", async () => {
     const { app } = setup();
-    const res = await app.inject({ method: "GET", url: `/maps/${MAP_ID}` });
+    const res = await app.inject({ method: "GET", url: `/api/v1/maps/${MAP_ID}` });
     assert.equal(res.statusCode, 200);
     const body = res.json() as { map: MapDoc; features: unknown[] };
     assert.equal(body.map.id, MAP_ID);
@@ -88,7 +153,7 @@ describe("GET /maps/:id", () => {
 
   test("404 for an unknown map", async () => {
     const { app } = setup();
-    const res = await app.inject({ method: "GET", url: "/maps/nope" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/maps/nope" });
     assert.equal(res.statusCode, 404);
     await app.close();
   });
@@ -97,7 +162,7 @@ describe("GET /maps/:id", () => {
   test("a map in another tenant is not visible", async () => {
     const { app, repo } = setup();
     repo.seed({ ...DOC, id: "other-map", tenantId: "t-2" }, []);
-    const res = await app.inject({ method: "GET", url: "/maps/other-map" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/maps/other-map" });
     assert.equal(res.statusCode, 404);
     await app.close();
   });
@@ -108,7 +173,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup();
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 200);
@@ -121,7 +186,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup();
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 400);
@@ -133,12 +198,12 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup();
     await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("a", 35)] },
     });
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("b", 36)] },
     });
     assert.equal(res.statusCode, 409);
@@ -150,7 +215,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup("viewer");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 403);
@@ -161,7 +226,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup("contributor");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 200);
@@ -175,7 +240,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup("contributor", undefined, "u-someone-else");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 403);
@@ -187,7 +252,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup("editor", undefined, "u-someone-else");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 200);
@@ -198,7 +263,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup("wizard");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 403);
@@ -209,7 +274,7 @@ describe("POST /maps/:id/edit", () => {
     const { app } = setup();
     const res = await app.inject({
       method: "POST",
-      url: "/maps/nope/edit",
+      url: "/api/v1/maps/nope/edit",
       payload: { rev: 0, put: [point("p2", 36)] },
     });
     assert.equal(res.statusCode, 404);
@@ -222,7 +287,7 @@ describe("POST /maps/:id/publish", () => {
     const { app } = setup();
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/publish`,
+      url: `/api/v1/maps/${MAP_ID}/publish`,
     });
     assert.equal(res.statusCode, 201);
     const body = res.json() as { version: number; etag: string };
@@ -234,10 +299,10 @@ describe("POST /maps/:id/publish", () => {
   // 200, not 201: nothing was created.
   test("republishing unchanged content is 200 unchanged", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/publish`,
+      url: `/api/v1/maps/${MAP_ID}/publish`,
     });
     assert.equal(res.statusCode, 200);
     assert.equal((res.json() as { status: string }).status, "unchanged");
@@ -248,7 +313,7 @@ describe("POST /maps/:id/publish", () => {
     const { app } = setup("contributor");
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/publish`,
+      url: `/api/v1/maps/${MAP_ID}/publish`,
     });
     assert.equal(res.statusCode, 403);
     assert.match((res.json() as { reason: string }).reason, /submit for review/);
@@ -259,17 +324,17 @@ describe("POST /maps/:id/publish", () => {
 describe("POST /maps/:id/rollback", () => {
   test("rolls back to an earlier version as a new version", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
     await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("p2", 36)] },
     });
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/rollback`,
+      url: `/api/v1/maps/${MAP_ID}/rollback`,
       payload: { toVersion: 1 },
     });
     assert.equal(res.statusCode, 201);
@@ -281,7 +346,7 @@ describe("POST /maps/:id/rollback", () => {
     const { app } = setup();
     const res = await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/rollback`,
+      url: `/api/v1/maps/${MAP_ID}/rollback`,
       payload: {},
     });
     assert.equal(res.statusCode, 400);
@@ -292,7 +357,7 @@ describe("POST /maps/:id/rollback", () => {
 describe("GET /public/*", () => {
   test("serves the artifact with its cache headers", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     const key = keys.version(TENANT_SLUG, DOC.slug, 1);
     const res = await app.inject({ method: "GET", url: `/public/${key}` });
@@ -307,7 +372,7 @@ describe("GET /public/*", () => {
   // The polling read path depends on this: no body, validators repeated.
   test("a matching If-None-Match returns 304 with no body", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     const key = keys.pointer(TENANT_SLUG, DOC.slug);
     const first = await app.inject({ method: "GET", url: `/public/${key}` });
@@ -327,7 +392,7 @@ describe("GET /public/*", () => {
 
   test("a non-matching If-None-Match returns the body", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
     const key = keys.pointer(TENANT_SLUG, DOC.slug);
     const res = await app.inject({
       method: "GET",
@@ -341,7 +406,7 @@ describe("GET /public/*", () => {
 
   test("the pointer carries a short TTL, the artifact a long one", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     const p = await app.inject({
       method: "GET",
@@ -370,14 +435,14 @@ describe("end-to-end publish loop", () => {
   // Edit -> publish -> pointer -> artifact: the whole viewer read path.
   test("an edit becomes visible through the public path", async () => {
     const { app } = setup();
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     await app.inject({
       method: "POST",
-      url: `/maps/${MAP_ID}/edit`,
+      url: `/api/v1/maps/${MAP_ID}/edit`,
       payload: { rev: 0, put: [point("new-strike", 36.2)] },
     });
-    await app.inject({ method: "POST", url: `/maps/${MAP_ID}/publish` });
+    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
 
     const ptr = await app.inject({
       method: "GET",

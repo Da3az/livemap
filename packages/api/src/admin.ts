@@ -20,6 +20,12 @@ import pg from "pg";
  * THIS POOL IGNORES EVERY ROW-LEVEL SECURITY POLICY. Never hand it to
  * `buildServer`, and never reach for it from a request handler. `PostgresRepo`
  * has `assertRlsActive()` precisely so that mistake fails at boot.
+ *
+ * There is exactly one path from a request to this pool, and it does not pass
+ * the pool along: `PostgresGuestProvisioner` in guests.ts wraps it behind two
+ * operations that take no caller input. Guest signup has to create a tenant,
+ * which is cross-tenant by definition. A second such path should be argued for
+ * the same way, not added beside it.
  */
 export interface AdminDbOptions {
   readonly connectionString: string;

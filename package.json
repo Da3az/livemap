@@ -11,8 +11,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "npm run build -w @livemap/core && npm run build -w @livemap/renderer && npm run build -w @livemap/api && npm run build -w @livemap/viewer && npm run build -w @livemap/editor",
-    "typecheck": "npm run typecheck -w @livemap/core && npm run typecheck -w @livemap/renderer && npm run typecheck -w @livemap/api && npm run typecheck -w @livemap/viewer && npm run typecheck -w @livemap/editor",
+    "build": "npm run build -w @livemap/core && npm run build -w @livemap/renderer && npm run build -w @livemap/api && npm run build -w @livemap/viewer && npm run build -w @livemap/editor && npm run build -w @livemap/app",
+    "typecheck": "npm run typecheck -w @livemap/core && npm run typecheck -w @livemap/renderer && npm run typecheck -w @livemap/api && npm run typecheck -w @livemap/viewer && npm run typecheck -w @livemap/editor && npm run typecheck -w @livemap/app",
     "test": "npm run test --workspaces --if-present",
     "spike": "node spikes/run.mjs",
     "demo": "node --import tsx demo/server.mjs",
@@ -23,6 +23,8 @@
     "migrate:down": "node scripts/migrate.mjs down",
     "migrate:status": "node scripts/migrate.mjs status",
     "serve": "node --import tsx scripts/serve.mjs",
+    "reap-guests": "node --import tsx scripts/reap-guests.mjs",
+    "mint-token": "node --import tsx scripts/mint-token.mjs",
     "bench:seed": "node --import tsx bench/seed.mjs",
     "bench:serve": "node --import tsx bench/server.mjs",
     "loadtest": "bash loadtest/sweep-all.sh"

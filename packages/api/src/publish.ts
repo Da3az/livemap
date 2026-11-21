@@ -15,12 +15,18 @@ export type PublishOutcome =
   | { readonly status: "published"; readonly version: MapVersion }
   | { readonly status: "unchanged"; readonly version: number; readonly etag: string }
   | { readonly status: "not_found" }
-  | { readonly status: "forbidden"; readonly reason: string };
+  | { readonly status: "forbidden"; readonly reason: string }
+  | { readonly status: "quota"; readonly reason: string };
 
 export interface PublishInput {
   readonly ctx: RepoCtx;
   readonly tenantSlug: string;
   readonly mapId: string;
+  /**
+   * Most versions this map may ever have. Versions are numbered from 1 without
+   * gaps, so the newest number is also the count. Omit or null for no limit.
+   */
+  readonly maxVersions?: number | null;
   /** Override the clock, for deterministic tests. */
   readonly now?: () => string;
 }
@@ -78,6 +84,9 @@ export async function publishMap(
     return { status: "unchanged", version: latest.version, etag: latest.etag };
   }
 
+  const full = versionQuota(input.maxVersions, latest);
+  if (full) return full;
+
   // 2 — ledger. The callback runs inside the allocating transaction, because
   // the storage key and the byte count both depend on the number it assigns.
   let built = candidate;
@@ -126,6 +135,19 @@ export async function publishMap(
   return { status: "published", version: built };
 }
 
+function versionQuota(
+  max: number | null | undefined,
+  latest: VersionRecord | null,
+): PublishOutcome | null {
+  if (max === null || max === undefined || !latest || latest.version < max) {
+    return null;
+  }
+  return {
+    status: "quota",
+    reason: `a map in this workspace is limited to ${max} published versions`,
+  };
+}
+
 /** Republishes an earlier version's bytes as a new version; the ledger stays append-only. */
 export async function rollbackMap(
   repo: MapRepo,
@@ -140,9 +162,18 @@ export async function rollbackMap(
   const doc = await repo.getMap(input.ctx, input.mapId);
   if (!doc) return { status: "not_found" };
 
-  const sourceKey = keys.version(input.tenantSlug, doc.slug, input.toVersion);
-  const source = await store.get(sourceKey);
+  // The key comes from the ledger row, not from rebuilding it out of today's
+  // slugs: the row records where the bytes actually went.
+  const target = await repo.getVersion(input.ctx, input.mapId, input.toVersion);
+  if (!target) return { status: "not_found" };
+  const source = await store.get(target.storageKey);
   if (!source) return { status: "not_found" };
+
+  const full = versionQuota(
+    input.maxVersions,
+    await repo.getLatestVersion(input.ctx, input.mapId),
+  );
+  if (full) return full;
 
   const previous = JSON.parse(source.body) as MapVersion;
 
