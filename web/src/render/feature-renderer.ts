@@ -5,7 +5,7 @@ import { cameraFor, projectWith, unprojectWith, type GlCamera } from "./gl/camer
 import { FeatureLayerOwner } from "./gl/feature-layer";
 import { GpuScene, type DrawList } from "./gl/gpu-scene";
 import { DashRegistry, ImageRegistry, phaseOf } from "./gl/images";
-import { PrimBuffer } from "./gl/prims";
+import { PrimBuffer, PrimMode } from "./gl/prims";
 import { emitStatic, emitView, emitWhole, isViewDependent, textImage, type EmitContext } from "./gl/tessellate";
 import { hitsShape, shapeTouchesBox } from "./hit";
 import { labelBucket, LabelPlacer, type LabelEntry } from "./labels";
@@ -13,7 +13,7 @@ import { NarrowAnnotations } from "./narrow";
 import { readPalette, type Palette, type ThemeMode } from "./palette";
 import { TILE } from "./patterns";
 import { buildSceneItem, Scene, toTimeWindow, type SceneItem, type TimeWindow } from "./scene";
-import { arrowParts, buildShape, teethAlong, worldWrap, type ScreenShape } from "./shapes";
+import { arrowParts, buildShape, worldWrap, type ScreenShape } from "./shapes";
 import { fontEpoch, fontsReadyFor, onFontsLoaded } from "./text";
 import { readView, type View } from "./view";
 
@@ -148,6 +148,13 @@ export class FeatureRenderer {
   private structure = 0;
   private visible = new Uint8Array(1);
   private visibleVersion = 0;
+  /** Per slot: an arrow shaft's trim for the current zoom (see `emitFlat`). */
+  private trims = new Float32Array(8);
+  private trimsVersion = 0;
+  /** The reference frame arrow values were last computed for. */
+  private arrowsFrame = -1;
+  /** Cumulative mercator length along each arrow's curve. */
+  private readonly curveLengths = new WeakMap<SceneItem, Float64Array>();
   private base: Pt | null = null;
   private frame: ReferenceFrame | null = null;
   private frameCounter = 0;
@@ -625,7 +632,16 @@ export class FeatureRenderer {
     this.syncSequence();
     this.syncFrame(view, camera);
     this.syncDraft(view, camera);
-    return { structure: this.structure, buffers: this.buffers, images: this.images, dashes: this.dashes, visible: this.visible, visibleVersion: this.visibleVersion };
+    return {
+      structure: this.structure,
+      buffers: this.buffers,
+      images: this.images,
+      dashes: this.dashes,
+      visible: this.visible,
+      visibleVersion: this.visibleVersion,
+      features: this.trims,
+      featuresVersion: this.trimsVersion,
+    };
   }
 
   /** Builds the fixed primitives of new items and lays the buffers out in draw order. */
@@ -657,12 +673,19 @@ export class FeatureRenderer {
         draw.slot = slot;
         draw.fixed?.setSlot(slot);
         draw.moving?.setSlot(slot);
+        /* Its per-slot values live at the old slot; compute them again. */
+        draw.movingFrame = -1;
+        this.arrowsFrame = -1;
       }
       next.set(item, draw);
       sequence.push(draw);
     }
     this.draws = next;
     this.sequence = sequence;
+    /* New items (a drag replaces one per pointer move) need their arrow values; all are cheap to recompute. */
+    this.arrowsFrame = -1;
+    /* Room for every label, so labels a zoom reveals never force the instance buffer to be laid out again. */
+    this.labelBuffer.reserve = sequence.reduce((count, draw) => count + (draw.item.text && draw.item.feature.kind !== "annotation" ? 1 : 0), 0);
     if (this.frame) for (const item of this.frame.shapes.keys()) if (!next.has(item)) this.frame.shapes.delete(item);
     this.labelKey = "";
     this.placedInputs = "";
@@ -684,6 +707,12 @@ export class FeatureRenderer {
   private refreshVisibility(): void {
     const length = this.sequence.length + 1;
     if (this.visible.length !== length) this.visible = new Uint8Array(length);
+    if (this.trims.length !== length * 8) {
+      this.trims = new Float32Array(length * 8);
+      this.trimsVersion++;
+      for (const draw of this.sequence) draw.movingFrame = -1;
+      this.arrowsFrame = -1;
+    }
     this.sequence.forEach((draw, index) => (this.visible[index] = draw.item.inWindow ? 255 : 0));
     this.visible[this.sequence.length] = 255;
     this.visibleVersion++;
@@ -744,8 +773,18 @@ export class FeatureRenderer {
      */
     const current = frame;
     const reach = current.reach;
+    if (reach && this.arrowsFrame !== current.id) {
+      this.arrowsFrame = current.id;
+      const h = current.camera.h;
+      const scale = Math.hypot(h[0]!, h[3]!);
+      for (const draw of this.sequence) if (draw.item.feature.kind === "arrow") this.arrowValues(draw, scale);
+      this.trimsVersion++;
+    }
     for (const draw of this.sequence) {
       if (!draw.moving || draw.movingFrame === current.id) continue;
+      /* Without pitch only arrow heads and notes depend on the view; the rest is drawn by the static part. */
+      const { feature } = draw.item;
+      if (reach && !(feature.kind === "arrow" && feature.tapered) && feature.kind !== "annotation") continue;
       if (reach && !boxesOverlap(reach, draw.item.box) && !this.nearAcrossWorlds(reach, draw.item.box)) continue;
       this.buildMoving(draw, current);
     }
@@ -793,9 +832,15 @@ export class FeatureRenderer {
     /* Mercator geometry draws at its nearest copy by itself; geometry carried back from the screen is already there. */
     buffer.wrapRef = geometric ? centre : centre + wrap;
     const project = geometric ? (p: Pt) => projectWith(frame.camera, { x: p.x + wrap, y: p.y }) : (p: Pt) => projectWith(frame.camera, p);
-    const flat = frame.reach !== null && (item.geometry.kind === "arrow" || item.geometry.kind === "frontline");
-    if (flat) this.emitFlat(buffer, item, frame, wrap);
-    else emitView(buffer, item, frame.shapes.get(item) ?? null, this.toMerc(frame), this.emitContext(project, this.shift));
+    if (frame.reach === null) {
+      /* Pitched: everything view-dependent from screen shapes, as the 2D renderer built it (R.1). */
+      buffer.mode = PrimMode.Pitched;
+      emitView(buffer, item, frame.shapes.get(item) ?? null, this.toMerc(frame), this.emitContext(project, this.shift));
+    } else if (item.geometry.kind === "arrow") {
+      this.emitFlat(buffer, draw, frame, wrap);
+    } else if (item.geometry.kind === "annotation") {
+      emitView(buffer, item, frame.shapes.get(item) ?? null, this.toMerc(frame), this.emitContext(project, this.shift), true);
+    }
     const shape = frame.shapes.get(item) ?? null;
     draw.movingFrame = frame.id;
     draw.noteKey = shape?.kind === "annotation" ? this.noteKey(shape) : "";
@@ -809,34 +854,81 @@ export class FeatureRenderer {
    * left unturned: the same shapes, without projecting every point to the
    * screen and back.
    */
-  private emitFlat(buffer: PrimBuffer, item: SceneItem, frame: ReferenceFrame, wrap: number): void {
+  private emitFlat(buffer: PrimBuffer, draw: ItemDraw, frame: ReferenceFrame, wrap: number): void {
+    const { item } = draw;
     const { feature, geometry, style } = item;
+    if (geometry.kind !== "arrow" || feature.kind !== "arrow") return;
     const h = frame.camera.h;
     const scale = Math.hypot(h[0]!, h[3]!);
     const origin = frame.view.origin;
     const toPx = (p: Pt): Pt => ({ x: (p.x + wrap - origin.x) * scale, y: (p.y - origin.y) * scale });
     const fromPx = (p: Pt): Pt => ({ x: p.x / scale + origin.x, y: p.y / scale + origin.y });
     const context = this.emitContext((p) => ({ x: (p.x - origin.x) * scale, y: (p.y - origin.y) * scale }), this.shift);
-    const strokeWidth = style.stroke?.width ?? 0;
-    if (geometry.kind === "arrow" && feature.kind === "arrow") {
-      const parts = arrowParts(geometry.curve.map(toPx), strokeWidth, feature.head, feature.tapered, style.stroke?.dash ?? []);
-      emitView(buffer, item, { kind: "arrow", ...parts, text: null, box: emptyBox() }, fromPx, context);
-      return;
+    const curve = geometry.curve.map(toPx);
+    const parts = arrowParts(curve, style.stroke?.width ?? 0, feature.head, feature.tapered, style.stroke?.dash ?? []);
+    emitView(buffer, item, { kind: "arrow", ...parts, text: null, box: emptyBox() }, fromPx, context, true);
+  }
+
+  /**
+   * An untapered arrow's values for this zoom, for the GPU: where the shaft
+   * starts and stops along the curve, the head length, and the direction of
+   * travel into each head, by the rules of `arrowParts` in shapes.ts. Done
+   * from the curve's cumulative lengths (kept per item), so it costs a binary
+   * search per arrow rather than a walk of the curve.
+   */
+  private arrowValues(draw: ItemDraw, scale: number): void {
+    const { feature, geometry, style } = draw.item;
+    if (feature.kind !== "arrow" || geometry.kind !== "arrow") return;
+    const o = draw.slot * 8;
+    if (o + 8 > this.trims.length) return;
+    const curve = geometry.curve;
+    let cumulative = this.curveLengths.get(draw.item);
+    if (!cumulative) {
+      cumulative = new Float64Array(curve.length);
+      for (let index = 1; index < curve.length; index++) {
+        const a = curve[index - 1]!;
+        const b = curve[index]!;
+        cumulative[index] = cumulative[index - 1]! + Math.hypot(b.x - a.x, b.y - a.y);
+      }
+      this.curveLengths.set(draw.item, cumulative);
     }
-    if (geometry.kind === "frontline" && feature.kind === "frontline") {
-      const reach = frame.reach;
-      if (!reach) return;
-      const corners = [toPx({ x: reach.minX - wrap, y: reach.minY }), toPx({ x: reach.maxX - wrap, y: reach.maxY })];
-      const window = {
-        minX: Math.min(corners[0]!.x, corners[1]!.x) - feature.toothSize,
-        minY: Math.min(corners[0]!.y, corners[1]!.y) - feature.toothSize,
-        maxX: Math.max(corners[0]!.x, corners[1]!.x) + feature.toothSize,
-        maxY: Math.max(corners[0]!.y, corners[1]!.y) + feature.toothSize,
-      };
-      const points = geometry.path.map(toPx);
-      const teeth = teethAlong(points, { spacing: feature.toothSpacing, size: feature.toothSize, side: feature.facing === "left" ? 1 : -1, shape: feature.toothShape }, window);
-      emitView(buffer, item, { kind: "frontline", points, teeth, text: null, box: emptyBox() }, fromPx, context);
-    }
+    const lengths = cumulative;
+    const total = (lengths[curve.length - 1] ?? 0) * scale;
+    const heads = feature.head === "double" ? 2 : feature.head === "single" ? 1 : 0;
+    const width = style.stroke?.width ?? 0;
+    const length = heads > 0 ? Math.min(Math.max(10, Math.min(44, width * 3.2 + 4)), total / (heads + 0.6)) : 0;
+    const cut = Math.max(0, length - 1);
+    /* The direction from the point `along` pixels into the curve to `towards`, a tip. */
+    const directionTo = (along: number, towards: Pt, backwards: boolean): Pt => {
+      const target = along / scale;
+      let low = 0;
+      let high = curve.length - 1;
+      while (high - low > 1) {
+        const middle = (low + high) >> 1;
+        if (lengths[middle]! <= target) low = middle;
+        else high = middle;
+      }
+      const a = curve[low]!;
+      const b = curve[high] ?? a;
+      const span = lengths[high]! - lengths[low]!;
+      const t = span > 0 ? Math.min(1, Math.max(0, (target - lengths[low]!) / span)) : 0;
+      const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      const dx = towards.x - at.x;
+      const dy = towards.y - at.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0) return { x: dx / d, y: dy / d };
+      const sx = b.x - a.x;
+      const sy = b.y - a.y;
+      const s = Math.hypot(sx, sy) || 1;
+      return backwards ? { x: -sx / s, y: -sy / s } : { x: sx / s, y: sy / s };
+    };
+    const tip = curve[curve.length - 1] ?? { x: 0, y: 0 };
+    const tail = curve[0] ?? tip;
+    const end = heads >= 1 ? total - cut : total;
+    const start = heads === 2 ? cut : 0;
+    const intoEnd = directionTo(end, tip, false);
+    const intoTail = directionTo(start, tail, true);
+    this.trims.set([start, end, length, 0, intoEnd.x, intoEnd.y, intoTail.x, intoTail.y], o);
   }
 
   private noteKey(shape: Extract<ScreenShape, { kind: "annotation" }>): string {

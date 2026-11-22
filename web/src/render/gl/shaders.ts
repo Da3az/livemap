@@ -15,6 +15,7 @@ layout(location = 2) in vec4 i_params;
 layout(location = 3) in vec4 i_color;
 layout(location = 4) in float i_wrap;
 layout(location = 5) in uint i_meta;
+layout(location = 6) in float i_aux;
 
 uniform mat3 u_h;
 uniform vec2 u_cam;
@@ -24,6 +25,10 @@ uniform vec2 u_tile;
 uniform float u_dpr;
 uniform highp sampler2D u_visible;
 uniform highp isampler2D u_entries;
+uniform highp sampler2D u_features;
+/* CSS pixels per mercator unit, and whether the camera is pitched (then u_scale is not used). */
+uniform float u_scale;
+uniform float u_pitched;
 
 flat out int v_type;
 flat out vec4 v_color;
@@ -31,6 +36,7 @@ out vec2 v_local;
 flat out vec4 v_a;
 flat out vec4 v_b;
 flat out ivec4 v_tex;
+flat out vec4 v_c;
 
 const vec4 NOWHERE = vec4(-4.0, -4.0, 0.0, 1.0);
 
@@ -51,9 +57,11 @@ vec4 clip(vec2 device) {
 }
 
 void main() {
-  int type = int(i_meta & 255u);
+  int type = int(i_meta & 15u);
+  int mode = int(i_meta & 48u);
   int slot = int(i_meta >> 8u);
   v_type = type;
+  v_c = vec4(0.0);
   v_color = i_color;
   v_local = vec2(0.0);
   v_a = vec4(0.0);
@@ -61,6 +69,8 @@ void main() {
   v_tex = ivec4(0);
   gl_Position = NOWHERE;
   if (type == 0) return;
+  /* Built for the other kind of camera (see PrimMode). */
+  if ((mode == 16 && u_pitched > 0.5) || (mode == 32 && u_pitched < 0.5)) return;
   if (texelFetch(u_visible, ivec2(slot & 4095, slot >> 12), 0).r < 0.5) return;
 
   g_wrap = floor(u_camX - i_wrap + 0.5);
@@ -102,7 +112,30 @@ void main() {
     return;
   }
 
-  if (type == 2 || type == 3) {
+  if (type == 7) {
+    /* An arrowhead: tip fixed, length and direction for this zoom from the arrow's values. */
+    vec4 values = texelFetch(u_features, ivec2((slot * 2) & 4095, (slot * 2) >> 12), 0);
+    vec4 directions = texelFetch(u_features, ivec2((slot * 2 + 1) & 4095, (slot * 2 + 1) >> 12), 0);
+    float headLength = values.z * u_dpr;
+    if (headLength < 1e-3) return;
+    vec2 tip;
+    if (!toDevice(project(i_ab.xy), tip)) return;
+    vec2 travel = i_params.x < 0.5 ? directions.xy : directions.zw;
+    vec2 ahead;
+    if (!toDevice(project(i_ab.xy + travel / u_scale), ahead)) return;
+    vec2 dir = normalize(ahead - tip + vec2(1e-12));
+    vec2 n = vec2(-dir.y, dir.x);
+    float halfWidth = headLength * 0.55;
+    float ext = u_dpr + 1.5;
+    float along = c.x < 0.5 ? -(headLength + ext) : ext;
+    float across = c.y < 0.5 ? -(halfWidth + ext) : halfWidth + ext;
+    v_local = vec2(along, across);
+    v_a = vec4(headLength, halfWidth, i_params.y, 0.0);
+    gl_Position = clip(tip + dir * along + n * across);
+    return;
+  }
+
+  if (type == 2 || type == 3 || type == 6) {
     vec2 a;
     vec2 b;
     if (!toDevice(project(i_ab.xy), a) || !toDevice(project(i_ab.zw), b)) return;
@@ -126,12 +159,40 @@ void main() {
       if ((flags & 1) != 0 && toDevice(project(i_ab.xy + i_extra.xy), pd)) p = vec2(dot(pd - a, dir), dot(pd - a, n));
       vec2 qd;
       if ((flags & 2) != 0 && toDevice(project(i_ab.zw + i_extra.zw), qd)) q = vec2(dot(qd - a, dir), dot(qd - a, n));
+      /*
+       * Path distances in device pixels: where this segment starts, where the
+       * dash pattern starts, and the stretch of path that is drawn. The start
+       * is either the phase the CPU computed for this view or, without pitch,
+       * the cumulative mercator distance times this zoom's scale.
+       */
+      float start = (flags & 32) != 0 ? i_aux * u_scale * u_dpr : i_params.y * u_dpr;
+      float origin = 0.0;
+      float lo = (flags & 1) != 0 ? -1e30 : start;
+      float hi = (flags & 2) != 0 ? 1e30 : start + len;
+      if ((flags & 64) != 0) {
+        vec4 trim = texelFetch(u_features, ivec2((slot * 2) & 4095, (slot * 2) >> 12), 0);
+        lo = trim.x * u_dpr;
+        hi = trim.y * u_dpr;
+        origin = lo;
+      }
       v_a = vec4(len, hw, i_params.w, i_params.z);
       v_b = vec4(p, q);
+      v_c = vec4(start, origin, lo, hi);
       v_local = vec2(along, across);
-      /* The dash phase at this segment's start, in device pixels, carried bit for bit. */
-      v_tex = ivec4(floatBitsToInt(i_params.y * u_dpr), 0, 0, 0);
       gl_Position = clip(a + dir * along + n * across);
+      return;
+    }
+    if (type == 6) {
+      /* Teeth stand on the left of travel as the screen shows it (side +1), or the right. */
+      float size = i_params.x * u_dpr;
+      float side = sign(i_params.z);
+      vec2 outward = -side * n;
+      along = c.x < 0.5 ? -size : len + size;
+      across = c.y < 0.5 ? -(u_dpr + 1.5) : size + u_dpr + 1.5;
+      v_local = vec2(along, across);
+      v_a = vec4(len, size, max(4.0, i_params.y) * u_dpr, i_params.w);
+      v_b = vec4(i_aux * u_scale * u_dpr, abs(i_params.z) > 1.5 ? 1.0 : 0.0, 0.0, 0.0);
+      gl_Position = clip(a + dir * along + outward * across);
       return;
     }
     /* A fringe: from the edge outwards on one side, one and a half pixels wide. */
@@ -183,6 +244,7 @@ in vec2 v_local;
 flat in vec4 v_a;
 flat in vec4 v_b;
 flat in ivec4 v_tex;
+flat in vec4 v_c;
 
 uniform vec2 u_viewport;
 uniform vec2 u_tile;
@@ -202,6 +264,22 @@ float segmentDistance(vec2 p, vec2 s0, vec2 s1) {
   if (t <= 0.0) return length(p - s0);
   if (t >= 1.0) return length(p - s1);
   return length(p - (s0 + d * t));
+}
+
+/* Signed distance to a triangle, negative inside. */
+float triangleDistance(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+  vec2 e0 = p1 - p0;
+  vec2 e1 = p2 - p1;
+  vec2 e2 = p0 - p2;
+  vec2 v0 = p - p0;
+  vec2 v1 = p - p1;
+  vec2 v2 = p - p2;
+  vec2 q0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  vec2 q1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  vec2 q2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  float orientation = sign(e0.x * e2.y - e0.y * e2.x);
+  vec2 d = min(min(vec2(dot(q0, q0), orientation * (v0.x * e0.y - v0.y * e0.x)), vec2(dot(q1, q1), orientation * (v1.x * e1.y - v1.y * e1.x))), vec2(dot(q2, q2), orientation * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
 }
 
 float paintMask(float paint) {
@@ -286,25 +364,59 @@ void main() {
     if (hasNext && segmentDistance(p, vec2(len, 0.0), v_b.zw) < self - 1e-3) discard;
     bool startButt = !hasPrev && (flags & 4) != 0;
     bool endButt = !hasNext && (flags & 8) != 0;
+    float start = v_c.x;
+    float origin = v_c.y;
+    float lo = v_c.z;
+    float hi = v_c.w;
     if (row >= 0) {
       /* Path distance; past a joint it stops at the joint, past an open end it runs on so a round dot keeps its cap. */
-      float phase = intBitsToFloat(v_tex.x);
-      float s = phase + (hasPrev ? max(u, 0.0) : u);
-      if (hasNext) s = min(s, phase + len);
-      float lo = hasPrev ? -1e30 : phase;
-      float hi = hasNext ? 1e30 : phase + len;
+      float s = start + (hasPrev ? max(u, 0.0) : u);
+      if (hasNext) s = min(s, start + len);
       bool joint = (u < 0.0 && hasPrev) || (u > len && hasNext);
-      coverage = dashCoverage(row, s, joint ? self : abs(p.y), hw, (flags & 16) != 0, lo, hi);
+      coverage = dashCoverage(row, s - origin, joint ? self : abs(p.y), hw, (flags & 16) != 0, lo - origin, hi - origin);
     } else {
       /* A butt end cuts square; a round end or a joint is the distance to the segment. */
       bool square = (u < 0.0 && startButt) || (u > len && endButt);
       coverage = clamp(hw - (square ? abs(p.y) : self) + 0.5, 0.0, 1.0);
+      if ((flags & 64) != 0) {
+        /* Cut square where the shaft meets its heads. */
+        float s = start + u;
+        coverage *= clamp(s - lo + 0.5, 0.0, 1.0) * clamp(hi - s + 0.5, 0.0, 1.0);
+      }
     }
     if (startButt) coverage *= clamp(u + 0.5, 0.0, 1.0);
     if (endButt) coverage *= clamp(len - u + 0.5, 0.0, 1.0);
   } else if (v_type == 3) {
     if (v_local.x < 0.0 || v_local.x > v_a.x) discard;
     coverage = clamp(0.5 - v_local.y, 0.0, 1.0) * paintMask(v_a.y);
+  } else if (v_type == 6) {
+    /* Teeth at a fixed spacing along the path, the stations that fall on this segment. */
+    float len = v_a.x;
+    float size = v_a.y;
+    float spacing = v_a.z;
+    bool casing = v_a.w > 0.5;
+    bool semicircle = v_b.y > 0.5;
+    float start = v_b.x;
+    float s = start + v_local.x;
+    float halfSize = size * 0.5;
+    float reach = halfSize + u_dpr + 1.0;
+    int first = int(floor((s - reach - spacing * 0.5) / spacing));
+    float best = 0.0;
+    for (int step = 0; step < 16; step++) {
+      int k = first + step;
+      float station = spacing * 0.5 + float(k) * spacing;
+      if (station > s + reach) break;
+      if (station < start || station >= start + len) continue;
+      vec2 q = vec2(s - station, v_local.y);
+      float d = semicircle ? max(length(q) - halfSize, -q.y) : triangleDistance(q, vec2(-halfSize, 0.0), vec2(0.0, size * 0.9), vec2(halfSize, 0.0));
+      best = max(best, casing ? clamp(u_dpr + 0.5 - abs(d), 0.0, 1.0) : clamp(0.5 - d, 0.0, 1.0));
+    }
+    coverage = best;
+  } else if (v_type == 7) {
+    float headLength = v_a.x;
+    float halfWidth = v_a.y;
+    float d = triangleDistance(v_local, vec2(0.0), vec2(-headLength, halfWidth), vec2(-headLength, -halfWidth));
+    coverage = v_a.z > 0.5 ? clamp(u_dpr + 0.5 - abs(d), 0.0, 1.0) : clamp(0.5 - d, 0.0, 1.0);
   } else if (v_type == 4) {
     coverage = clamp(v_a.x - length(v_local) + 0.5, 0.0, 1.0);
   } else if (v_type == 5) {

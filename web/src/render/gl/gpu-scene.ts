@@ -15,6 +15,13 @@ export interface DrawList {
   /** One byte per visibility slot: 255 drawn, 0 not. */
   visible: Uint8Array;
   visibleVersion: number;
+  /**
+   * Eight floats (two texels) per visibility slot, an arrow's values for this
+   * zoom: where its shaft starts and ends along the path and its head length
+   * (CSS pixels), then the direction of travel at the end and at the tail.
+   */
+  features: Float32Array;
+  featuresVersion: number;
 }
 
 export interface DrawTarget {
@@ -34,9 +41,11 @@ export interface DrawTarget {
 const PATTERNS: Exclude<FillPattern, "none">[] = ["hatch", "cross", "dots"];
 const VISIBLE_WIDTH = 4096;
 const ENTRY_WIDTH = 1024;
-const UNITS = { visible: 0, entries: 1, atlas: 2, patterns: 3, dash: 4 } as const;
+const UNITS = { visible: 0, entries: 1, atlas: 2, patterns: 3, dash: 4, features: 5 } as const;
 /** Atlas layers kept before the atlas is rebuilt with only what is drawn. */
 const ATLAS_BUDGET = 4;
+/** Changed buffers closer than this many bytes go up in one call. */
+const MERGE_GAP = 64 * 1024;
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type);
@@ -67,7 +76,7 @@ export class GpuScene {
   private readonly vao: WebGLVertexArrayObject;
   private readonly instances: WebGLBuffer;
   private readonly uniforms: Record<string, WebGLUniformLocation | null> = {};
-  private readonly textures: { visible: WebGLTexture; entries: WebGLTexture; atlas: WebGLTexture | null; patterns: WebGLTexture | null; dash: WebGLTexture };
+  private readonly textures: { visible: WebGLTexture; entries: WebGLTexture; atlas: WebGLTexture | null; patterns: WebGLTexture | null; dash: WebGLTexture; features: WebGLTexture };
 
   /** The instance buffer's contents, kept on the CPU so changes go up in one range. */
   private mirror = new Uint8Array(BYTES);
@@ -77,6 +86,8 @@ export class GpuScene {
   private visibleVersion = -1;
   private visibleRows = 0;
   private dashVersion = -1;
+  private featuresVersion = -1;
+  private featureRows = 0;
   private patternRatio = 0;
   /** `bufferChanges()` and the image registry when instances and images were last brought up to date. */
   private seenChanges = -1;
@@ -112,7 +123,7 @@ export class GpuScene {
     this.program = program;
     this.vao = vao;
     this.instances = instances;
-    for (const name of ["u_h", "u_cam", "u_camX", "u_viewport", "u_tile", "u_dpr", "u_visible", "u_entries", "u_patternOrigin", "u_atlas", "u_patterns", "u_dash"]) {
+    for (const name of ["u_h", "u_cam", "u_camX", "u_viewport", "u_tile", "u_dpr", "u_visible", "u_entries", "u_patternOrigin", "u_atlas", "u_patterns", "u_dash", "u_features", "u_scale", "u_pitched"]) {
       this.uniforms[name] = gl.getUniformLocation(program, name);
     }
     const texture = () => {
@@ -120,7 +131,7 @@ export class GpuScene {
       if (!t) throw new Error("WebGL could not allocate a texture");
       return t;
     };
-    this.textures = { visible: texture(), entries: texture(), atlas: null, patterns: null, dash: texture() };
+    this.textures = { visible: texture(), entries: texture(), atlas: null, patterns: null, dash: texture(), features: texture() };
     this.atlasSize = Math.min(2048, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
 
     const saved = this.saveState();
@@ -141,6 +152,7 @@ export class GpuScene {
     gl.enableVertexAttribArray(5);
     gl.vertexAttribIPointer(5, 1, gl.UNSIGNED_INT, BYTES, 56);
     gl.vertexAttribDivisor(5, 1);
+    float(6, 1, 60);
     this.restoreState(saved);
   }
 
@@ -161,7 +173,7 @@ export class GpuScene {
     const { gl } = this;
     const active = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     const units: { two: WebGLTexture | null; array: WebGLTexture | null }[] = [];
-    for (let unit = 0; unit <= UNITS.dash; unit++) {
+    for (let unit = 0; unit <= UNITS.features; unit++) {
       gl.activeTexture(gl.TEXTURE0 + unit);
       units.push({ two: gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null, array: gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY) as WebGLTexture | null });
     }
@@ -250,7 +262,8 @@ export class GpuScene {
       let offset = 0;
       for (const buffer of list.buffers) {
         const had = previous.get(buffer)?.capacity ?? 0;
-        const capacity = buffer.count === 0 && had === 0 ? 0 : Math.max(had, buffer.count + Math.ceil(buffer.count / 2) + 8);
+        const wanted = Math.max(buffer.count, buffer.reserve);
+        const capacity = wanted === 0 && had === 0 ? 0 : Math.max(had, wanted + Math.ceil(wanted / 2) + 8);
         this.placed.set(buffer, { offset, capacity, version: buffer.version });
         offset += capacity;
       }
@@ -265,9 +278,12 @@ export class GpuScene {
       this.structure = list.structure;
       return;
     }
-    /* Copy what changed into the mirror and upload the one range that spans it. */
-    let low = Infinity;
-    let high = -Infinity;
+    /*
+     * Copy what changed into the mirror and upload it in ranges: one per run
+     * of changed buffers, merged where the gap between two is small enough
+     * that sending it is cheaper than another call.
+     */
+    const ranges: [number, number][] = [];
     for (const buffer of list.buffers) {
       const place = this.placed.get(buffer);
       if (!place || place.version === buffer.version) continue;
@@ -277,12 +293,13 @@ export class GpuScene {
       this.mirror.set(bytes, start);
       this.mirror.fill(0, start + bytes.length, end);
       place.version = buffer.version;
-      low = Math.min(low, start);
-      high = Math.max(high, end);
+      const last = ranges[ranges.length - 1];
+      if (last && start - last[1] <= MERGE_GAP) last[1] = Math.max(last[1], end);
+      else ranges.push([start, end]);
     }
-    if (high > low) {
+    if (ranges.length > 0) {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instances);
-      gl.bufferSubData(gl.ARRAY_BUFFER, low, this.mirror, low, high - low);
+      for (const [low, high] of ranges) gl.bufferSubData(gl.ARRAY_BUFFER, low, this.mirror, low, high - low);
     }
   }
 
@@ -304,6 +321,26 @@ export class GpuScene {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, VISIBLE_WIDTH, rows, gl.RED, gl.UNSIGNED_BYTE, data);
     }
     this.visibleVersion = list.visibleVersion;
+  }
+
+  private uploadFeatures(list: DrawList): void {
+    if (list.featuresVersion === this.featuresVersion && this.featureRows > 0) return;
+    const { gl } = this;
+    const rows = Math.max(1, Math.ceil(list.features.length / 4 / VISIBLE_WIDTH));
+    const data = new Float32Array(rows * VISIBLE_WIDTH * 4);
+    data.set(list.features.subarray(0, Math.min(list.features.length, data.length)));
+    gl.activeTexture(gl.TEXTURE0 + UNITS.features);
+    gl.bindTexture(gl.TEXTURE_2D, this.textures.features);
+    this.plainUnpack(4);
+    if (rows !== this.featureRows) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, VISIBLE_WIDTH, rows, 0, gl.RGBA, gl.FLOAT, data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      this.featureRows = rows;
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, VISIBLE_WIDTH, rows, gl.RGBA, gl.FLOAT, data);
+    }
+    this.featuresVersion = list.featuresVersion;
   }
 
   private uploadDashes(dashes: DashRegistry): void {
@@ -576,6 +613,7 @@ export class GpuScene {
         this.seenRegistry = list.images;
       }
       this.uploadVisible(list);
+      this.uploadFeatures(list);
       this.uploadDashes(list.dashes);
       this.uploadPatterns(target.pixelRatio);
       if (this.totalInstances === 0) return;
@@ -592,6 +630,8 @@ export class GpuScene {
       gl.uniform2f(u.u_viewport ?? null, target.viewport.width, target.viewport.height);
       gl.uniform2f(u.u_tile ?? null, target.tile.x, target.tile.y);
       gl.uniform1f(u.u_dpr ?? null, target.pixelRatio);
+      gl.uniform1f(u.u_scale ?? null, Math.hypot(h[0]!, h[3]!));
+      gl.uniform1f(u.u_pitched ?? null, camera.pitched ? 1 : 0);
       gl.uniform2f(u.u_patternOrigin ?? null, target.patternOrigin.x, target.patternOrigin.y);
       const bind = (unit: number, kind: number, texture: WebGLTexture | null, name: string) => {
         gl.activeTexture(gl.TEXTURE0 + unit);
@@ -603,6 +643,7 @@ export class GpuScene {
       bind(UNITS.atlas, gl.TEXTURE_2D_ARRAY, this.textures.atlas, "u_atlas");
       bind(UNITS.patterns, gl.TEXTURE_2D_ARRAY, this.textures.patterns, "u_patterns");
       bind(UNITS.dash, gl.TEXTURE_2D, this.textures.dash, "u_dash");
+      bind(UNITS.features, gl.TEXTURE_2D, this.textures.features, "u_features");
 
       gl.enable(gl.BLEND);
       gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
