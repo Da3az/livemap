@@ -334,7 +334,8 @@ export const CREATE_BODY = {
   additionalProperties: false,
   required: ["title", "uiDir", "template"],
   properties: {
-    title: RICH_TEXT,
+    // May be empty: the dialog lets a map start untitled, and the server names it.
+    title: { ...TEXT, properties: { value: { type: "string", maxLength: 200 }, dir: DIR } },
     uiDir: UI_DIR,
     template: { type: "string", enum: ["blank", "conflict-tracker", "storm-track", "regional-results"] },
   },

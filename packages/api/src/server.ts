@@ -681,7 +681,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
           if (!can(actor.role, "map:create")) return forbidden(reply, "Your role in this workspace does not allow creating maps.");
           const out = await deps.repo.createMap(
             actor,
-            { title: req.body.title, uiDir: req.body.uiDir, settings: templateSettings(req.body.template, req.body.uiDir) },
+            { title: titleOrDefault(req.body.title, req.body.uiDir), uiDir: req.body.uiDir, settings: templateSettings(req.body.template, req.body.uiDir) },
             { maxMaps: limitsOf(actor).maxMaps },
           );
           if (out.status === "quota") return quota(reply, out.reason);
@@ -896,6 +896,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   );
 
   return app;
+}
+
+/** A map created without a title is named in its own direction's language. */
+function titleOrDefault(title: CreateMapRequest["title"], uiDir: CreateMapRequest["uiDir"]): CreateMapRequest["title"] {
+  const value = title.value.trim();
+  if (value.length > 0) return { ...title, value };
+  return uiDir === "rtl" ? { value: "خريطة بلا عنوان", dir: "rtl" } : { value: "Untitled map", dir: "ltr" };
 }
 
 /** The capabilities the front end's `Session` carries; the rest of the grid stays on the server. */

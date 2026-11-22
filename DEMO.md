@@ -16,15 +16,14 @@ npm run db:up && npm run migrate   # Postgres + PostGIS on :5460
 npm run demo                       # demo site          → :8800   (no DB needed)
 npm run serve                      # production API     → :8787   (needs DB + secret)
 npm run bench:serve                # load-test bench    → :8801
-npm test                           # 249 tests
-npm run spike                      # headless render + 18 assertions
+node demo/app-check.mjs            # drives the running demo headless, leaves screenshots
 npm run loadtest                   # full sweep, ~8 min
 npm run db:down                    # stop the database
 ```
 
 | URL | What you get |
 |---|---|
-| `http://127.0.0.1:8800/` | The application: sign in as a guest, or paste the token the demo prints |
+| `http://127.0.0.1:8800/` | The application: sign in as a guest, or paste one of the tokens the demo prints |
 | `/maps` | The workspace — every map, New map, templates |
 | `/maps/<id>` | The editor |
 | `/maps/<id>/versions` | The version ledger, cache headers, rollback, embed code |
@@ -56,7 +55,7 @@ npm run db:down                    # stop the database
 
 ## 1. What this project is, in 60 seconds
 
-> It's the backend and rendering engine for **live-event maps** — the maps a
+> It's a product for authoring **live-event maps** — the maps a
 > newsroom publishes during a breaking story. An editor colours regions, drops
 > event icons, draws movement arrows and front lines, annotates, and hits
 > publish. Readers get an embeddable map that updates as the story moves.
@@ -69,7 +68,7 @@ npm run db:down                    # stop the database
 If you only remember one sentence for the demo, use the last one. It's the
 thing that makes this different from a CRUD app with a map on top.
 
-**Scale:** ~11,000 lines across 5 packages, 249 tests, 41 commits.
+**Scale:** three packages — the shared model (`core`), the API, and the front end (`web`).
 
 ---
 
@@ -120,12 +119,12 @@ Sanity check the whole thing before you demo anything:
 
 ```bash
 npm run build
-npm test
+npm run demo                 # in one terminal
+node demo/app-check.mjs      # in another
 ```
 
-Expected: **249 tests, 249 pass, 0 fail.** If you run `npm test` without the
-database up, 8 integration tests skip and 241 pass — that's correct behaviour,
-not a failure.
+Expected: five `ok` lines and `all checks passed`, then read the screenshots in
+`demo/shots/`.
 
 ### Ports used
 
@@ -163,108 +162,62 @@ If you have 15 minutes with an engineer: do **A then B**. Skip the rest.
 npm run demo
 ```
 
-It prints three URLs and a session token for a seeded workspace. This boots the
-**real API** — the same `buildServer()` the production entrypoint uses — and the
-real application shell over an in-memory repository, so Track A needs no
-database at all. Open **http://127.0.0.1:8800/**.
+It builds the front end if `web/dist` is missing, then prints three URLs and a
+session token for each role in a seeded workspace, **Al Mashriq Newsroom**. This
+boots the **real API** — the same `buildServer()` the production entrypoint
+uses — serving the real front end over an in-memory repository, so Track A
+needs no database at all. Open **http://127.0.0.1:8800/**.
 
 ### A1. Sign in and the workspace (60 seconds)
 
-The sign-in page offers **Continue as guest** and a field for a session token.
-Click **Continue as guest**.
+The sign-in page states the guest terms the server sends (how long a guest
+workspace lasts, how many maps, features and versions), offers **Continue as
+guest**, and a field for a session token. Beside them is a live published map,
+*Cyclone Shaheen*, drawn from the same artifact an article would embed.
 
-You land on **Maps**: a table with its column headers and no rows, a usage
-counter reading `0 / 5`, and a strip saying the workspace is temporary and when
-it expires.
+Click **Continue as guest**. You land on **Maps**: the table with its columns
+and no rows, and a **Maps in use** counter against the guest limit.
 
 **Say this:**
 > That guest is a real tenant. Signup created a tenant, a user and an owner
 > membership, and everything after it goes through the same row-level security
 > as a paying newsroom would. It is rate limited per address, capped in total,
-> and held to quotas — five maps, two thousand features a map — because a
-> public endpoint that writes to a database is a spam target otherwise.
+> and held to quotas — because a public endpoint that writes to a database is a
+> spam target otherwise. In production it sits behind Cloudflare Turnstile.
 
-Click **New map**. Pick **Conflict tracker**, then **Create**.
+Click **New map**, pick **Storm track**, and create it.
 
 ### A2. The editor (2 minutes)
 
-You'll see a newsroom scene: a red *Contested* region, a green held region, an
-orange dashed evacuation zone, a black toothed front line, curved red and blue
-movement arrows with chevrons, event icons on coloured discs, and annotations
-in both Arabic and English with leader lines connecting label to anchor.
-
-The toolbar is one row in three parts. Left: **Select (V), Area (A), Line (L),
-Arrow (R), Front line (F), Icon (I), Note (N)**. Middle: the style controls for
-the active tool only. Right: **Undo, Redo, Features, RTL / LTR, Preview, Save**,
-and set apart from them, the published state and **Publish**. There is no side
-panel until something is selected.
+The template set up presets (warning levels, the observed and forecast track,
+shelters), groups, the key, the title block and a cumulative timeline, and no
+features. Draw with the dock at the bottom: **Select, Area, Line, Arrow, Front
+line, Icon, Text**, each with its key. Pick a preset and draw an area; the key
+updates. The list on the left is the draw order — drag to reorder across kinds.
 
 **Say this:**
-> Every shape here is generated geometry, not an icon. There is no permissively
-> licensed icon set anywhere that contains a front-line symbol, so the teeth are
-> computed along the path. Same for the arrowheads — they're tangent to the
-> *smoothed* curve, not to the control points, which is the bug you get if you
-> do it the obvious way.
-
-**Then zoom out two steps.** Point at the front line:
-> Watch the teeth. They're denominated in pixels and converted per view, so the
-> line reads correctly at every zoom. An earlier prototype sized them in metres;
-> it looked perfect at the authoring zoom and fell apart everywhere else.
-
-**Then point at an Arabic label:**
-> The leader lines don't collapse when you zoom out because the label offset is
-> stored in screen pixels, not degrees. And the halo around Arabic text is
-> floored at 1.01 pixels — MapLibre draws halos per-glyph at 1px or below, which
-> cuts the joins between Arabic letters. There's a test pinning that constant.
-
-Do this, in order:
-
-1. Press **A**, click three or four points on the map, double-click to close.
-   → a coloured region appears.
-2. Press **R**, click three points. → a curved arrow with an arrowhead.
-3. Press **I**, click once. → an event icon on a disc.
-4. Click a shape with **Select (V)** → the Inspector opens with its colour,
-   width and label fields. Change the colour; the map updates immediately.
-5. Hit **Undo** twice, then **Redo** once.
-6. Hit **Save** → the status bar shows the new revision.
-7. Hit **Publish** → the state beside the button reads `v1 live`.
-
-**Say this:**
-> Undo isn't a document snapshot. Every edit is a forward/reverse pair, so undo
-> is just applying the reverse — which maps one-to-one onto row-level database
-> writes. That matters because the alternative, storing one blob per map, is
-> exactly how uMap lost user data and how Placemark ends up re-sorting its
-> entire collection on every single edit.
+> Every feature, its label included, is drawn in one ordered WebGL pass inside
+> MapLibre, so the order you see in the list is the order on the map whatever
+> the kinds. Text is shaped by the browser in the interface typefaces, which is
+> why Arabic joins correctly. Saving sends only what changed — settings too, as
+> a patch — against the revision you opened; if a colleague saved first you get
+> their name and a choice, not a silent overwrite.
 
 ### A3. RTL (30 seconds)
 
-The map opened right-to-left, because the template says so. Click
-**RTL / LTR**.
+Create a map from **Conflict tracker**: it starts right-to-left, and the whole
+editor mirrors and speaks Arabic, from logical CSS properties alone.
 
-The editor mirrors; the application around it does not. **Say this:**
-> There is not a single `[dir="rtl"]` layout override in the stylesheet. It
-> mirrors purely from CSS logical properties. The one direction-specific rule in
-> the whole file is a font choice, not a layout rule.
+### A4. Versions, the embed and an update in place (60 seconds)
 
-### A4. Versions and the embed (60 seconds)
+Publish from the top bar, then **History**: the pointer readers poll, the live
+artifact with its ETag and cache policy, and every version with its origin
+("From rev 3", "Rolled back to v1") and who published it. **Embed** gives the
+snippet.
 
-Click **Versions** at the top right.
-
-One row per published version: version, ETag, size, feature count, when, by
-whom, and the `Cache-Control` header that version is actually served with —
-read from the artifact by a `HEAD` request, not printed from a constant. Above
-the table, the pointer `latest.json` with its own, much shorter, policy.
-
-Below the table: the embed code and a live preview in a sandboxed iframe.
-
-**Say this:**
-> The iframe reports its height to the parent over postMessage, and the parent
-> validates both the frame identity and the payload shape before trusting it.
-> Validating only one of those is the standard way this becomes an XSS vector.
-
-`/article.html` shows the same embed on a page that is not this application.
-
----
+Open **http://127.0.0.1:8800/article.html** in another window. Change the map
+in the editor and publish: the article picks up the new version within seconds,
+by polling a five-second pointer, and says "Updated".
 
 ## Track B — the architecture claim (the strongest material)
 
@@ -278,52 +231,54 @@ This is the part that separates the project from a portfolio CRUD app.
 
 ### B2. Show the publish lifecycle by hand (3 minutes)
 
-With `npm run demo` running, open a second terminal. The API needs the session
-token the demo printed for its seeded workspace; published artifacts need
-nothing.
+With `npm run demo` running, open a second terminal. The API needs a session
+token the demo printed (the owner's); published artifacts need nothing. Map ids
+are new on every run, so fetch it:
 
 ```bash
 B=http://127.0.0.1:8800
-T='<the token the demo printed>'
+T='<the owner token the demo printed>'
 A="Authorization: Bearer $T"
+MAP=$(curl -s -H "$A" "$B/api/v1/maps?archived=false" | python3 -c "import json,sys;print(json.load(sys.stdin)['maps'][0]['id'])")
 ```
 
 **Read the map:**
 
 ```bash
-curl -s -H "$A" $B/api/v1/maps/m-1 | head -c 200
+curl -s -H "$A" $B/api/v1/maps/$MAP | head -c 200
 ```
 
 **Publish when nothing has changed:**
 
 ```bash
-curl -s -X POST -H "$A" $B/api/v1/maps/m-1/publish
+curl -s -X POST -H "$A" $B/api/v1/maps/$MAP/publish
 ```
 ```json
-{"status":"unchanged","version":1,"etag":"a93fb35ba29154298947e72a0df3e640"}
+{"status":"unchanged","version":1,"etag":"\"29d172bf572d3bc0ba3a25f6b536bcbe\""}
 ```
 
 > **Say:** Note `unchanged`, and a 200 rather than a 201 — nothing was created.
-> The content hash deliberately excludes `publishedAt` and `publishedBy`, so
-> republishing an identical map returns the identical ETag and every reader's
-> cache stays warm. Hit publish ten times, readers re-download nothing.
+> The hash is over exactly what readers receive, without the version number or
+> the publish time, so republishing what readers already have returns the same
+> ETag and every reader's cache stays warm. Hit publish ten times, readers
+> re-download nothing.
 
 **Fetch the artifact and look at the headers:**
 
 ```bash
-curl -si "$B/public/t/demo-news/m/levant-tracker/v/1.json" | head -8
+curl -si "$B/public/t/al-mashriq/m/cyclone-shaheen/v/1.json" | head -8
 ```
 ```
 cache-control: public, max-age=31536000, immutable
-etag: "a93fb35ba29154298947e72a0df3e640"
+etag: "29d172bf572d3bc0ba3a25f6b536bcbe"
 ```
 
 **Now ask for it again with that ETag:**
 
 ```bash
 curl -s -o /dev/null -w "%{http_code} %{size_download} bytes\n" \
-  -H 'If-None-Match: "a93fb35ba29154298947e72a0df3e640"' \
-  "$B/public/t/demo-news/m/levant-tracker/v/1.json"
+  -H 'If-None-Match: "29d172bf572d3bc0ba3a25f6b536bcbe"' \
+  "$B/public/t/al-mashriq/m/cyclone-shaheen/v/1.json"
 ```
 ```
 304 0 bytes
@@ -335,7 +290,7 @@ curl -s -o /dev/null -w "%{http_code} %{size_download} bytes\n" \
 **The pointer object is cached completely differently:**
 
 ```bash
-curl -si "$B/public/t/demo-news/m/levant-tracker/latest.json" | grep -i cache-control
+curl -si "$B/public/t/al-mashriq/m/cyclone-shaheen/latest.json" | grep -i cache-control
 ```
 ```
 cache-control: public, max-age=5, stale-while-revalidate=30, stale-if-error=90
@@ -350,12 +305,12 @@ cache-control: public, max-age=5, stale-while-revalidate=30, stale-if-error=90
 **Optimistic concurrency — the failure that matters:**
 
 ```bash
-curl -s -X POST -H "$A" $B/api/v1/maps/m-1/edit -H 'content-type: application/json' -d '{"rev":99,"put":[]}'
-curl -s -X POST -H "$A" $B/api/v1/maps/m-1/edit -H 'content-type: application/json' -d '{"put":[]}'
+curl -s -X POST -H "$A" $B/api/v1/maps/$MAP/edit -H 'content-type: application/json' -d '{"rev":99,"put":[],"delete":[]}'
+curl -s -X POST -H "$A" $B/api/v1/maps/$MAP/edit -H 'content-type: application/json' -d '{"put":[],"delete":[]}'
 ```
 ```json
-{"error":"stale_revision"}   # 409
-{"error":"rev_required"}     # 400
+{"error":"stale_revision","reason":"Layla Haddad saved this map after you opened it.","current":{"rev":1,"updatedBy":"Layla Haddad","updatedAt":"…"}}   # 409
+{"error":"invalid_request","reason":"The request does not match what the server accepts: body must have required property 'rev'."}   # 400
 ```
 
 > **Say:** A write must carry the revision it read. A stale writer loses rather
@@ -367,15 +322,16 @@ curl -s -X POST -H "$A" $B/api/v1/maps/m-1/edit -H 'content-type: application/js
 **Rollback:**
 
 ```bash
-curl -s -X POST -H "$A" $B/api/v1/maps/m-1/rollback -H 'content-type: application/json' -d '{"toVersion":1}'
+curl -s -X POST -H "$A" $B/api/v1/maps/$MAP/rollback -H 'content-type: application/json' -d '{"toVersion":1}'
 ```
 ```json
-{"status":"rolled_back","version":3}
+{"status":"rolled_back","version":2}
 ```
 
-> **Say:** Rolling back to v1 produced **v3**, not a mutation of v1. The ledger
-> is append-only, so the audit trail survives. v3's body and ETag are byte-identical
-> to v1 — same content, new ledger entry.
+> **Say:** Rolling back to v1 produced **v2**, not a mutation of v1. The ledger
+> is append-only, so the audit trail survives, and v2 records that it came from
+> v1. Its content and ETag are v1's — same content, new ledger entry — and the
+> draft is left alone.
 
 The same sequence is clickable in the application: publish from the editor,
 then roll back from the versions page.
@@ -456,27 +412,18 @@ the wins do:
 ### B4. The verification habit
 
 ```bash
-npm run spike
+node demo/app-check.mjs
 ```
 
-Takes about a minute. Expected tail:
+With the demo running, this drives it in headless Chromium the way a visitor
+would — guest sign-in, the workspace, the article with the embed in its
+sandboxed frame — and leaves screenshots in `demo/shots/`.
 
-```
-z9.2-authoring         areas=3 lines=6 teeth= 37 markers= 29 labels=4 heads=3
-z12-zoomed-in          areas=3 lines=3 teeth=259 markers=137 labels=1 heads=3
-...
-PASS  teeth increase zooming in (37 -> 259)
-PASS  arrowhead rotations are view-independent
-PASS  z12-zoomed-in: no overlapping labels
-ALL ASSERTIONS PASSED
-```
-
-> **Say:** This renders the scene in headless Chromium across five views and
-> asserts on the real output — tooth count goes 1, 4, 37, 259 across the zoom
-> range while the arrowhead stays visually constant. Worth knowing: an earlier
-> version of these assertions went green while three genuine defects were plainly
-> visible in the screenshots. Structural assertions are necessary and not
-> sufficient; I read the images too.
+> **Say:** The checks are necessary and not sufficient. An earlier version of
+> this project had structural assertions go green while three genuine defects
+> were plainly visible in the screenshots, so I read the images too. The
+> renderer was checked the same way: every scene rendered by the old canvas
+> renderer and the new WebGL one, diffed, and looked at.
 
 ---
 
@@ -631,9 +578,9 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/maps/$MAP
 ```bash
 for i in $(seq 1 70); do
   curl -s -o /dev/null -w "%{http_code} " -X POST http://127.0.0.1:8787/api/v1/maps/$MAP/edit \
-    -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"rev":999}'
+    -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"rev":999,"put":[],"delete":[]}'
 done; echo
-# 60 responses get through, then 10 × 429
+# 60 responses get through (409, a stale revision), then 10 × 429
 ```
 
 > **Say:** Reads aren't rate limited at all — the CDN absorbs those. Only writes
@@ -662,9 +609,9 @@ curl -s -w "  <- %{http_code}\n" http://127.0.0.1:8787/ready
 
 | File | What to point at |
 |---|---|
-| `packages/core/src/arrow.ts` | Catmull-Rom spline; the arrowhead takes its bearing from the *smoothed* curve; the shaft is trimmed so the line doesn't show through the head. Zero dependencies — pure maths, unit-testable in Node without a browser. |
-| `packages/core/src/collision.ts` | Label de-confliction by iterative relaxation. Note the relaxation factor below 1 — it stops two labels overshooting past each other and oscillating forever. And it *suppresses* a label it can't place rather than overlapping text. |
-| `packages/api/src/publish.ts` | The pointer is written **last**, always. A version row with no object is invisible and gets reconciled. A pointer naming an object that doesn't exist is a broken map on air. |
+| `packages/core/src/version.ts` | `buildArtifact` decides what a reader receives, and `publishHash` hashes exactly that. The front end's preview and the server's publish call the same function. |
+| `web/src/render/gl/` | One WebGL custom layer draws every feature, text included, in the author's order; panning is a uniform update. `layer-position.ts` is the one constant that decides where it sits against the basemap. |
+| `packages/api/src/publish.ts` | The artifact is written first and the pointer last, under the per-map lock, so neither a crash nor a slower concurrent publish can point readers backwards. |
 | `migrations/0001_init.sql` | RLS policies, the non-owner app role, and the comment on `features.id`. |
 
 ### D3. The honest bug story
@@ -771,11 +718,12 @@ Volunteering limitations is persuasive and costs nothing here:
 > hour to spare.
 
 **"How much of this is tested?"**
-> 249 tests. The geometry is pure functions with no dependencies, so it's
-> unit-tested directly. The publish pipeline is tested through a repository port
-> with both in-memory and Postgres implementations. RLS has integration tests
-> including a deliberate cross-tenant attempt. And rendering is verified in
-> headless Chromium with structural assertions plus screenshots.
+> Honestly: the test suite was written for the previous version of the API and
+> has not been brought forward yet; the plan is a short list of essential tests —
+> permissions, the publish rules, the embed's message checks, update polling.
+> What is verified today is end to end: the real flow driven in a browser against
+> Postgres, row-level security exercised through the API, and the renderer diffed
+> scene by scene against its predecessor.
 
 ---
 
@@ -836,19 +784,19 @@ Be straightforward about this. The honesty is part of the pitch.
 
 | Area | Status |
 |---|---|
-| Annotation geometry — arrows, front lines, leaders, de-confliction | **Real.** 129 tests. |
-| MapLibre renderer | **Real.** Verified in headless Chromium. |
-| Publish pipeline — versioning, ETags, rollback, reconciliation | **Real.** 45 tests. |
-| Postgres persistence + row-level security | **Real.** Migration applied, 8 integration tests. |
-| Auth — HMAC bearer tokens | **Real and tested**, but no identity provider. A token comes from guest signup or `npm run mint-token`. |
-| Guest workspaces | **Real.** A Postgres tenant with a 7-day life, rate limited, capped and held to quotas. Removal is `npm run reap-guests`, which must be scheduled. |
-| Application shell — sign-in, workspace, versions, embed | **Real.** Vanilla TypeScript, no framework. |
+| Front end — sign-in, workspace, editor, versions, embed | **Real.** React, wired to the API; driven end to end in a browser. |
+| Renderer — one ordered WebGL layer for editor, embed and export | **Real.** Diffed scene by scene against the canvas renderer it replaced; benchmarked at 500, 2,000 and 5,000 features. |
+| Publish pipeline — versioning, ETags, rollback, the pointer under lock | **Real.** |
+| Postgres persistence + row-level security | **Real.** Migrations 0001–0004 applied. |
+| Auth — HMAC bearer tokens | **Real**, but no identity provider. A token comes from guest signup or `npm run mint-token`. |
+| Guest workspaces | **Real.** A Postgres tenant with a 7-day life, Turnstile in front, rate limited, capped and held to quotas. Removal is `npm run reap-guests`, which must be scheduled. |
 | API reference | **Generated** from the route schemas that also validate requests. |
-| Rate limiting, readiness, error handling, graceful shutdown | **Real.** 11 tests. |
-| Viewer — polling, ETags, iframe embed | **Real.** 20 tests. |
+| Rate limiting, readiness, error handling | **Real.** |
+| Embed — polling, ETags, sandboxed iframe, auto-height | **Real.** |
 | Load tests | **Real**, and reproducible with one command. |
-| Editor | **Partial.** Draw, restyle, reorder, delete, undo/redo, publish. No vertex reshaping. |
+| Place search | **Stand-in.** A built-in list of about 270 places until a geocoder is chosen. |
 | Object storage | **Written, not yet run against a bucket.** `R2ArtifactStore` behind the `ArtifactStore` port; without `R2_*` set the server falls back to an in-process store and says so. |
+| Tests | **Not brought forward** from the previous API; essential ones to follow. |
 | Billing | **Not built.** |
 | Approval workflow, live feeds | **Schema only.** The tables exist; nothing reads them. |
 
