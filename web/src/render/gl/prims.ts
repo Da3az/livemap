@@ -20,6 +20,22 @@ export const enum PrimType {
   Fringe = 3,
   Disc = 4,
   Image = 5,
+  /** Front-line teeth along one stroke segment, drawn by the fragment shader at this zoom's spacing. */
+  Teeth = 6,
+  /** An arrowhead at a fixed tip, sized and turned by the GPU from this zoom's per-arrow values. */
+  Head = 7,
+}
+
+/**
+ * Which camera an instance belongs to. Without pitch, dash phases, arrow
+ * trims and teeth are computed on the GPU from this zoom's scale, so those
+ * instances are built once (`Flat`). With pitch, the screen is not a scaled
+ * copy of mercator, and the CPU builds them every frame instead (`Pitched`).
+ */
+export const enum PrimMode {
+  Both = 0,
+  Flat = 16,
+  Pitched = 32,
 }
 
 /** 32-bit words per instance. */
@@ -34,6 +50,8 @@ const PARAMS = 8;
 const COLOR = 12;
 const WRAP = 13;
 const META = 14;
+/** Cumulative mercator distance along the path at a segment's start. */
+const AUX = 15;
 
 /** Segment flags. */
 export const SEG_PREV = 1;
@@ -41,6 +59,10 @@ export const SEG_NEXT = 2;
 export const SEG_START_BUTT = 4;
 export const SEG_END_BUTT = 8;
 export const SEG_ROUND_DASH = 16;
+/** The dash phase is the cumulative distance times this zoom's scale, computed by the GPU. */
+export const SEG_SCALED_PHASE = 32;
+/** The path is cut where the feature's per-zoom trim says (an arrow shaft stopping at its heads). */
+export const SEG_TRIMMED = 64;
 
 let changes = 0;
 
@@ -77,8 +99,11 @@ export class PrimBuffer {
   /** Per-instance context set by the emitter. */
   wrapRef = 0;
   slot = 0;
+  mode: PrimMode = PrimMode.Both;
   /** Atlas entries referenced, for keeping them resident. */
   readonly images = new Set<number>();
+  /** Instances the GPU should leave room for, beyond the current count (a label pass that can grow). */
+  reserve = 0;
 
   constructor(capacity = 16) {
     const buffer = new ArrayBuffer(Math.max(1, capacity) * BYTES);
@@ -89,6 +114,7 @@ export class PrimBuffer {
 
   reset(origin: Pt): void {
     this.count = 0;
+    this.mode = PrimMode.Both;
     this.images.clear();
     this.gx = origin.x;
     this.gy = origin.y;
@@ -134,7 +160,7 @@ export class PrimBuffer {
     }
     this.u32[o + COLOR] = color;
     this.f32[o + WRAP] = this.wrapRef;
-    this.u32[o + META] = (type | (this.slot << 8)) >>> 0;
+    this.u32[o + META] = (type | this.mode | (this.slot << 8)) >>> 0;
   }
 
   /**
@@ -155,10 +181,11 @@ export class PrimBuffer {
    * of the same path: each pixel near a joint belongs to exactly one segment
    * (the nearer), so a translucent stroke is not darkened where pieces meet.
    */
-  segment(a: Pt, b: Pt, prev: Pt | null, next: Pt | null, halfWidth: number, color: number, flags: number, dashRow: number, phase: number): void {
+  segment(a: Pt, b: Pt, prev: Pt | null, next: Pt | null, halfWidth: number, color: number, flags: number, dashRow: number, phase: number, along = 0): void {
     const index = this.grow();
     this.put(index, a, b, null, PrimType.Segment, color);
     const o = index * WORDS;
+    this.f32[o + AUX] = along;
     let f = flags;
     if (prev) {
       f |= SEG_PREV;
@@ -174,6 +201,37 @@ export class PrimBuffer {
     this.f32[o + PARAMS + 1] = phase;
     this.f32[o + PARAMS + 2] = dashRow;
     this.f32[o + PARAMS + 3] = f;
+  }
+
+  /**
+   * An arrowhead whose tip is fixed: `end` true for the head at the path's
+   * end, false for a double arrow's tail. Its length and direction for the
+   * current zoom come from the arrow's per-zoom values; `casing` draws the
+   * 2 px outline weak colours get.
+   */
+  head(tip: Pt, end: boolean, casing: boolean, color: number): void {
+    const index = this.grow();
+    this.put(index, tip, null, null, PrimType.Head, color);
+    const o = index * WORDS;
+    this.f32[o + PARAMS] = end ? 0 : 1;
+    this.f32[o + PARAMS + 1] = casing ? 1 : 0;
+  }
+
+  /**
+   * The teeth a front line carries along segment a→b, whose start is `along`
+   * mercator units into the path. `side` is +1 for teeth on the left of the
+   * direction of travel as the screen shows it. `casing` draws the 2 px
+   * outline the 2D renderer stroked around weak-coloured teeth.
+   */
+  teeth(a: Pt, b: Pt, along: number, size: number, spacing: number, side: 1 | -1, semicircle: boolean, casing: boolean, color: number): void {
+    const index = this.grow();
+    this.put(index, a, b, null, PrimType.Teeth, color);
+    const o = index * WORDS;
+    this.f32[o + PARAMS] = size;
+    this.f32[o + PARAMS + 1] = spacing;
+    this.f32[o + PARAMS + 2] = side * (semicircle ? 2 : 1);
+    this.f32[o + PARAMS + 3] = casing ? 1 : 0;
+    this.f32[o + AUX] = along;
   }
 
   /** The anti-aliased outside edge of a fill, on the side given by `side` (±1 of the edge's left normal). */
@@ -214,7 +272,7 @@ export class PrimBuffer {
         f32[o + B] = src[s + 2]! - origin.x;
         f32[o + B + 1] = src[s + 3]! - origin.y;
       }
-      if ((u32[o + META]! & 255) === PrimType.Triangle) {
+      if ((u32[o + META]! & 15) === PrimType.Triangle) {
         f32[o + EXTRA] = src[s + 4]! - origin.x;
         f32[o + EXTRA + 1] = src[s + 5]! - origin.y;
       }
