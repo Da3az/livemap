@@ -72,7 +72,7 @@ function headAt(tip: Pt, dir: Pt, length: number): Pt[] {
   return [tip, { x: base.x - dir.y * half, y: base.y + dir.x * half }, { x: base.x + dir.y * half, y: base.y - dir.x * half }];
 }
 
-function arrowParts(curve: Pt[], width: number, head: "none" | "single" | "double", tapered: boolean, dash: readonly number[]) {
+export function arrowParts(curve: Pt[], width: number, head: "none" | "single" | "double", tapered: boolean, dash: readonly number[]) {
   const heads: Pt[][] = [];
   let shaft = curve;
   const total = polylineLength(curve);
@@ -154,7 +154,7 @@ function tooth(at: Pt, dir: Pt, side: 1 | -1, size: number, shape: "triangle" | 
  * produced: zoomed far in, a front line can be hundreds of thousands of
  * pixels long.
  */
-function teethAlong(
+export function teethAlong(
   points: readonly Pt[],
   options: { spacing: number; size: number; side: 1 | -1; shape: "triangle" | "semicircle" },
   viewport: Box,
@@ -223,7 +223,12 @@ export function worldWrap(item: SceneItem, view: View): number {
   return Math.round(view.centreX - (item.box.minX + item.box.maxX) / 2);
 }
 
-export function buildShape(item: SceneItem, view: View): ScreenShape {
+/**
+ * `teethWindow` widens the screen area front-line teeth are produced for
+ * (CSS pixels from the view's top-left corner), for geometry that is kept
+ * while the map pans.
+ */
+export function buildShape(item: SceneItem, view: View, teethWindow?: Box): ScreenShape {
   const { feature, geometry, style } = item;
   const wrap = worldWrap(item, view);
   const project = (p: Pt) => view.project(p, wrap);
@@ -248,7 +253,8 @@ export function buildShape(item: SceneItem, view: View): ScreenShape {
   }
   if (geometry.kind === "frontline" && feature.kind === "frontline") {
     const points = geometry.path.map(project);
-    const viewport = { minX: -feature.toothSize, minY: -feature.toothSize, maxX: view.width + feature.toothSize, maxY: view.height + feature.toothSize };
+    const frame = teethWindow ?? { minX: 0, minY: 0, maxX: view.width, maxY: view.height };
+    const viewport = { minX: frame.minX - feature.toothSize, minY: frame.minY - feature.toothSize, maxX: frame.maxX + feature.toothSize, maxY: frame.maxY + feature.toothSize };
     const teeth = teethAlong(
       points,
       { spacing: feature.toothSpacing, size: feature.toothSize, side: feature.facing === "left" ? 1 : -1, shape: feature.toothShape },

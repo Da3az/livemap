@@ -1,6 +1,6 @@
 import type { PointFeature } from "@/model/types";
 import { toCss } from "./color";
-import { boxesOverlap, type Box, type Pt } from "./geo";
+import type { Pt } from "./geo";
 import { paintGlyph } from "./icons";
 import type { Palette } from "./palette";
 import type { PatternCache } from "./patterns";
@@ -150,7 +150,11 @@ function paintLeader(context: CanvasRenderingContext2D, shape: Extract<ScreenSha
   }
 }
 
-/** Paints one feature's geometry. Labels are painted separately so they can sit above every shape. */
+/**
+ * Paints one feature's geometry on a 2D canvas: the legend's swatches, on
+ * screen and on exported images. The map itself is drawn by the WebGL layer
+ * (gl/), whose primitives follow these operations one for one.
+ */
 export function paintShape(context: CanvasRenderingContext2D, item: SceneItem, shape: ScreenShape, env: PaintEnv): void {
   const { style, feature } = item;
   context.save();
@@ -215,12 +219,6 @@ export function paintShape(context: CanvasRenderingContext2D, item: SceneItem, s
   context.restore();
 }
 
-/** Paints a feature's label. Annotations carry their text in the shape pass instead. */
-export function paintLabel(context: CanvasRenderingContext2D, shape: ScreenShape, env: PaintEnv): void {
-  if (shape.kind === "annotation" || !shape.text || shape.labelHidden) return;
-  paintText(context, shape.text.block, shape.text.centre, textColors(env.palette));
-}
-
 /** The outline of what is drawn, as the current path, for showing selection. */
 export function traceOutline(context: CanvasRenderingContext2D, shape: ScreenShape): void {
   context.beginPath();
@@ -249,25 +247,4 @@ export function traceOutline(context: CanvasRenderingContext2D, shape: ScreenSha
       }
       break;
   }
-}
-
-/**
- * One ordered pass over the drawn features, then their labels above all
- * geometry, so a higher shape never cuts through a lower shape's name. Where
- * each label sits was settled before this is called. Off-screen shapes are skipped.
- */
-export function paintDrawn(
-  context: CanvasRenderingContext2D,
-  drawn: readonly { item: SceneItem; shape: ScreenShape }[],
-  view: { width: number; height: number },
-  env: PaintEnv,
-): void {
-  const viewport: Box = { minX: 0, minY: 0, maxX: view.width, maxY: view.height };
-  const painted: ScreenShape[] = [];
-  for (const { item, shape } of drawn) {
-    if (!boxesOverlap(shape.box, viewport)) continue;
-    paintShape(context, item, shape, env);
-    painted.push(shape);
-  }
-  for (const shape of painted) paintLabel(context, shape, env);
 }
