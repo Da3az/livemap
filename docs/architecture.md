@@ -1,8 +1,8 @@
 # livemap — architecture
 
-**Status:** Phase 1. Core engine and renderer are built and verified; the API,
-editor and viewer are scaffolded. See `claude-plans/chat-livemap-foundation/task_plan.md`
-for what is and is not done.
+**Status:** the front end (`web/`) runs against the API end to end: sign-in,
+workspace, editing, publishing, versions and rollback, and the embed reading
+published artifacts. §6 lists what is not built.
 
 Every decision below traces to an entry in `claude-plans/decisions.md`, most of
 them backed by measurement rather than preference. Where a choice looks odd,
@@ -68,189 +68,114 @@ polls the pointer. That removes most of the projected build complexity.
 | Version artifact | `…/v/{n}.json` | `public, max-age=31536000, immutable` | Can never change under a reader |
 | Latest pointer | `…/latest.json` | `public, max-age=5, stale-while-revalidate=30, stale-if-error=90` | Tiny; this is what makes publishing visible |
 
-`buildVersion()` computes a content hash over the features, viewport, basemap,
-title and direction — **deliberately excluding `publishedAt` and
-`publishedBy`**, so republishing an unchanged map returns the same ETag and
-readers keep their cached copy.
+`buildArtifact()` builds what readers receive — hidden features, features in
+hidden groups, unused groups and presets, hidden legend entries and who changed
+each feature are all left out — and `publishHash()` hashes **that artifact**,
+without its version number and publish time. So the hash covers exactly what a
+reader sees: republishing a map whose readers would see nothing new answers
+`unchanged`, mints nothing, and readers keep their cached copy. The pointer's
+body is `{ version, url, etag, cacheControl, updatedAt }`.
 
 ## 3. Packages
 
 | Package | Depends on | Purpose |
 |---|---|---|
-| `@livemap/core` | **nothing** | Domain model + annotation geometry. Pure, Node-testable. **6.6 KiB min+gzip.** |
-| `@livemap/renderer` | core, (MapLibre structurally) | Builds MapLibre sources/layers. Shared *unchanged* by editor and viewer. |
-| `@livemap/api` | core | Fastify + Postgres + publish pipeline. |
-| `@livemap/editor` | core, renderer | The map editor: tools, inspector, undo, save, publish. Mounted by a host. |
-| `@livemap/app` | core, renderer, editor, viewer | The application shell: sign-in, workspace, editor chrome, version ledger, embed page. |
-| `@livemap/viewer` | core, renderer | The embeddable read-only viewer. |
+| `@livemap/core` | **nothing** | The one domain model, the API's request and response shapes, the settings patch, the publish builder and hash, fractional order keys, templates and the gazetteer. Pure, Node- and browser-safe. |
+| `@livemap/api` | core | Fastify routes, JSON Schemas, the publish pipeline, `PostgresRepo`, authz, auth, guests, limits, place search, the R2 store. |
+| `@livemap/web` (`web/`) | core | The front end: sign-in, workspace, editor, versions, the embed. React, Vite, MapLibre 6.19. |
 
-**`core` has zero dependencies on purpose.** The geodesy, spline and
-de-confliction code is ~700 lines; pulling in Turf would have added a
-dependency tree for functions we can write and test exactly. It also keeps the
-engine runnable in Node, which is what let 129 unit tests cover the geometry
-without a browser.
+**One model, compiled from source by both sides.** `web/src/model/types.ts`
+re-exports `@livemap/core`; the server's JSON Schemas (`schemas.ts`) restate the
+same shapes for validation and for `/docs`. The front end and the server build
+the published artifact with the same function (`buildArtifact`), so the editor's
+"what readers will see" preview cannot disagree with a publish.
 
-**The editor and viewer share one renderer.** That is the only way to
-guarantee what an author sees is what a reader gets. The viewer differs solely
-in never calling `setFeatures`.
+The workspace resolves `@livemap/core` to its TypeScript source through the
+`livemap-source` export condition (TypeScript `customConditions`, Vite
+`resolve.conditions`, `node --conditions=livemap-source`). Without it Node would
+load the package's last build.
 
-## 4. The annotation engine
+## 4. Rendering
 
-This is the differentiator, and nothing off-the-shelf provides it. terra-draw,
-mapbox-gl-draw, maplibre-gl-terradraw, leaflet-geoman **and** maplibre-geoman
-were all source-grepped for `arrow|bezier|curve|lineOffset|leader|callout`.
-All five have nothing.
+Readers, authors and image export share one renderer in `web/src/render`.
+`web/DECISIONS.md` P0.1, P0.2b and R.1–R.2 record how it was chosen; the short
+version:
 
-### Everything view-dependent is recomputed per view
+- **Free draw order across kinds.** Every feature, text included, is drawn in
+  one ordered pass, so an area can sit above a note or below a line as the
+  author orders it. MapLibre's own layers cannot do this: `*-sort-key` orders
+  only within a layer.
+- **Text is shaped by the browser** in the interface typefaces (Noto Naskh
+  Arabic, Newsreader, Libre Franklin), not by MapLibre's glyph atlas, so Arabic
+  joins and bidi are the browser's.
+- **The whole layer sits above the basemap's labels**, as designed. Its
+  position is one constant in one module, so it can move under the basemap's
+  first symbol layer or become a per-map setting.
+- **Everything view-dependent is recomputed per view** — arrowheads, taper,
+  front-line teeth and dash lengths are sized in screen pixels, never in
+  metres, so they hold at every zoom.
+- Image export draws the same scene at the export pixel ratio.
 
-The failure that shaped this design: the first prototype sized arrowheads and
-front-line teeth in **metres**, which looks correct at the authoring zoom and
-falls apart everywhere else — at z6.2 arrowheads were nearly the radius of the
-shrunken curves.
-
-So sizes are denominated in **pixels** and converted to metres for the current
-zoom on every rebuild:
-
-```
-arrowHeadPx(strokeWidth) ──► arrowHeadMetres(strokeWidth, lat, zoom) ──► trim length
-toothSpacingPx(width)    ──► toothSpacingMetres(width, lat, zoom)    ──► tooth count
-```
-
-Verified: tooth count goes 1 → 4 → 37 → 259 across z4.5 → z6.2 → z9.2 → z12,
-while the arrowhead stays visually constant.
-
-### Arrows
-
-Stored as **control points plus a curvature scalar**, not as rendered
-geometry. The curve is derived by a Catmull-Rom spline computed in Mercator
-world space (splining in raw lng/lat skews at high latitude), then unprojected.
-
-`curvature` scales the spline tangents, so **0 traces the straight polyline
-through the controls and 1 is full smoothing** — one continuous editor handle
-from straight to curved, with no mode switch.
-
-Two details that are easy to get wrong and both are tested:
-- The head bearing comes from the **smoothed** geometry. Taking it from the
-  control points puts the arrowhead visibly off-tangent on a curve.
-- The shaft is **trimmed back** by the head length, or the line shows through
-  a filled head. Trim is capped at 40% of the arrow so a low-zoom conversion
-  cannot annihilate the shaft.
-
-MapLibre wiring: `icon-rotate: bearing − 90` (the sprite points east),
-`icon-rotation-alignment: "map"` so camera rotation is free, and
-**`icon-ignore-placement: true`** — without it the collision engine silently
-drops arrowheads, and an arrow with no head is just a line.
-
-### Front lines
-
-No front-line symbol exists in any of ~10,000 permissively-licensed icons
-surveyed — correctly, because it is **line symbology with a facing side**, not
-a point icon. So it is generated: a base line plus one closed ring per tooth
-(triangle, tick or semicircle), emitted as real geometry that takes the
-feature's own colour and needs no sprite build.
-
-### Leader-lined annotations
-
-`AnnotationFeature.offset` is in **screen pixels**, not a geographic delta. A
-geographic offset changes its apparent distance at every zoom, which is why
-naive leader lines collapse when you zoom out.
-
-MapLibre's style spec cannot express a line between a geographic anchor and a
-screen-offset label, so the leader is emitted as a small GeoJSON source
-rebuilt per view. The alternative — a DOM/SVG overlay — desyncs during inertia
-and loses z-ordering against map layers.
-
-### Label de-confliction
-
-Having set `icon-ignore-placement` and `text-allow-overlap` so MapLibre never
-drops our authored marks, **we owe the user our own collision engine.**
-
-`deconflict()` is iterative relaxation with a deviation budget: labels are
-pushed apart along their minimum translation vector weighted by priority, but
-tethered to where the editor put them. Anything still colliding when the
-budget is exhausted is **suppressed rather than drawn as mush** — hiding a
-label is honest, overlapping text is not. It is deterministic (stable sort by
-priority then id) so labels do not jitter between frames.
+The renderer's own notes live beside its code in `web/src/render`.
 
 ## 5. Arabic / RTL
 
-**The renderer problem is solved upstream.** MapLibre 6.9.0+ does native
-Arabic shaping and bidi; measured pixel-identical to the old ICU plugin (0 of
-336,000 pixels differ). We ship no RTL plugin.
-
-What we still own:
-- **Halo width is clamped to ≥ 1.01.** MapLibre issue #8949: a halo of 1px or
-  less is drawn per-glyph and cuts the joins of connected scripts, mangling
-  Arabic. `normaliseHaloWidth()` enforces it and there is a test.
-- **Labels resolve as `coalesce(name:ar, name:nonlatin, name)`.** Measured
-  coverage: Riyadh has `name:ar` on only 12% of features but Arabic `name` on
-  99% of roads. Dubai is the genuine problem case at ~20% by any route.
-- **Direction is explicit per text, with `auto` resolved by first-strong
-  character.** An editor may deliberately want Arabic laid out LTR beside a
-  latinised name, so an explicit `dir` always wins.
-- **The editor UI must be RTL from the first commit.** Retrofitting RTL into
-  an editor with no i18n is the single largest avoidable cost identified in
-  research — uMap's Arabic is 7% real despite looking 100% complete.
+- **Feature text is the browser's.** Shaping, bidi and fonts come from the
+  browser's text engine; MapLibre issue #8949 (halos of 1px or less cut Arabic
+  joins) concerns MapLibre's own text and binds only if feature text ever moves
+  into a MapLibre symbol layer.
+- **Basemap labels follow `settings.basemap.labelLanguage`** (`ar`, `en` or the
+  local name), restyled on the basemap's own symbol layers.
+- **Direction is explicit per text.** Every `RichText` carries `dir`; `auto`
+  resolves by first strong character. A map's `uiDir` mirrors the editor and the
+  published furniture.
+- **The editor is RTL from the first commit**: logical CSS properties only, and
+  Arabic strings for every area that renders inside the editor or the embed.
 
 ## 6. Known gaps
 
 Stated plainly rather than discovered later:
 
-1. **Icons do not de-conflict.** Only labels do. At low zoom, event icons pile
-   up — visible in `spikes/shots/z6.2-zoomed-out.png`. Needs clustering or an
-   icon collision pass.
-2. **Labels do not avoid geometry**, only other labels and declared obstacles.
-   An annotation can sit on top of an arrow.
-3. **Area labels use the ring centroid**, which can fall outside a concave
-   region. Needs a pole-of-inaccessibility algorithm.
-4. **`zoomEpsilon` is accepted but not wired up.** A label-only fast path is
-   the obvious next optimisation; the option is reserved, and deliberately not
-   faked.
-5. **Offsets rotate with the camera.** Screen offsets are applied in unrotated
-   Mercator pixel space, so a rotated map rotates the label offset with it.
-   Correct for a map-anchored annotation, and news maps are near-always
-   north-up, but it is a choice rather than an accident.
-6. **No tile-performance measurement yet.** The PMTiles cold-start figure in
-   `findings.md` is still someone else's number.
-7. **`AdminDb` has one caller and no operator surface.** Guest signup reaches
+1. **No tile-performance measurement yet.** The PMTiles cold-start figure in
+   `findings.md` is still someone else's number, and the basemap is
+   OpenFreeMap's free service with no agreement.
+2. **`AdminDb` has one caller and no operator surface.** Guest signup reaches
    it through `GuestProvisioner`, two operations that take no caller input
    (§9). There is still no identity provider, so there is no way to
-   authenticate a platform operator and no honest place to put a general check
-   above it. Scripts hold their own provisioning SQL; §8 has the role split.
-8. **No approval workflow.** `publish_requests` has policies — a contributor may
-   insert, a publishing role may decide — but nothing reads the table. The
-   `publish:request` capability is granted and currently leads nowhere.
-9. **Guest workspaces are reaped by a script nothing schedules.**
+   authenticate a platform operator. Scripts hold their own provisioning SQL.
+3. **No approval workflow.** `publish_requests` has policies — a contributor may
+   insert, a publishing role may decide — but nothing reads the table.
+4. **Guest workspaces are reaped by a script nothing schedules.**
    `scripts/reap-guests.mjs` has to be run from outside. Until it is, expired
-   guests count against `MAX_GUESTS`, and at that ceiling signup answers 503 —
-   a bound on the damage, not a substitute for the schedule.
-10. **The R2 store has not met a real bucket.** Its requests are tested against
-    a stub and its contract suite skips without credentials. The bucket also
-    needs a CORS rule the code cannot set: `GET` from any origin, request
-    headers `cache-control` and `if-none-match`, `etag` exposed.
-11. **Rate limits are per process.** The limiter's store is in memory, which is
-    right for one instance and wrong for two.
-12. **No Content-Security-Policy on the application shell.** It needs writing
-    against a running browser: MapLibre's worker, the tile host and the bot
-    check each need an allowance, and a wrong one fails silently.
+   guests count against `MAX_GUESTS`, and at that ceiling signup answers 503.
+5. **The R2 store has not met a real bucket.** The bucket needs the CORS rule in
+   §9 ("Artifacts on R2"), which the code cannot set.
+6. **Rate limits are per process.** The limiter's store is in memory, which is
+   right for one instance and wrong for two.
+7. **No Content-Security-Policy beyond framing.** Pages send
+   `frame-ancestors` (§9). A full policy needs writing against a running
+   browser: MapLibre's worker (`worker-src data: blob:` in a sandboxed frame),
+   the tile host, the API and artifact origins, and Turnstile.
+8. **Place search answers from a built-in list.** `/api/v1/places` uses the
+   gazetteer in core (about 270 places) until a geocoder is chosen; `PlaceSearch`
+   is the seam.
+9. **The publish pointer and the artifact store are not one transaction.** The
+   pointer is written under the per-map lock after the artifact (§8), so the
+   worst interruption leaves readers on the previous version; an unchanged
+   republish rewrites the pointer and heals it.
 
 ## 7. Build requirements worth knowing
 
-- **MapLibre 6.x ships its worker as a separate file.** `maplibre-gl-worker.mjs`
-  must be copied next to the output bundle; bundling does not inline it. If it
-  is missing the map renders **nothing**, and the only clue is a 404 plus
-  "Worker failed to load". Cost us a debugging cycle; now explicit in
-  `spikes/run.mjs`.
+- **MapLibre 6.x ships its worker as a separate file.** Under Vite, web/ imports
+  its URL (`?worker&url`) and calls `setWorkerUrl` before creating a map. If it
+  is missing the map renders **nothing**, and the only clue is a 404.
+- **In a sandboxed (opaque-origin) frame**, MapLibre 6.19 fetches the worker and
+  starts it from a `data:` URL. The fetch is cross-origin, so every static file
+  is served with `Access-Control-Allow-Origin: *`.
 - **MapLibre 6.x has no default export.** `import { Map } from "maplibre-gl"`.
-  There is also **no `setWorkerUrl`** in 6.16, despite third-party docs saying
-  v6 requires it.
-- **`*-sort-key` is a LAYOUT property**, not paint, for fill/line/symbol.
-  Putting it in `paint` makes MapLibre reject the entire layer.
-- Build with **ESM, not IIFE** — an IIFE build breaks MapLibre's
-  `import.meta.url` worker resolution.
-- `getCanvas().width` is **device** pixels; `clientWidth` is CSS pixels. Label
-  layout works in CSS pixels, so using the former makes the viewport 2× too
-  large at dpr 2.
+- **`*-sort-key` is a LAYOUT property**, not paint. Putting it in `paint` makes
+  MapLibre reject the entire layer.
+- `getCanvas().width` is **device** pixels; `clientWidth` is CSS pixels.
 
 ## 8. Tenant isolation and the role model
 
@@ -332,11 +257,19 @@ Not five, and not one:
    together, serialised by `pg_advisory_xact_lock` on the map id. These were two
    transactions, so two publishers could read the same `max(version)` and the
    second collided on the primary key only *after* uploading its artifact.
-3. `setPublishedVersion` — must come after the artifact exists, or the `maps`
-   row points at bytes nobody can fetch.
+3. `setPublished` — after the artifact exists, takes the same advisory lock,
+   points the map at the version only if no newer one is live
+   (`published_version <= $v`), records `published_rev`, and writes
+   `latest.json` **while the lock is held**. A slower, older publish therefore
+   cannot repoint the map or overwrite the pointer after a newer one, and a
+   failed pointer write rolls the repoint back.
 
-One transaction is impossible: step 3 waits on an object store that cannot join
-a Postgres transaction.
+The object store still cannot join a Postgres transaction, so the artifact is
+written before anything points at it and the pointer last; an interruption
+leaves readers on the previous version, and an unchanged republish rewrites the
+pointer. Each version row records `source_rev` (the draft revision its content
+came from) and its origin, publish or rollback; a rollback copies its source's
+`source_rev`, so `published_rev` stays right however many rollbacks deep.
 
 The lock is an advisory lock rather than `select ... for update` on the maps row
 because, per the Postgres docs, `SELECT ... FOR UPDATE` applies the **UPDATE**
@@ -351,8 +284,9 @@ be reported as "no such map" instead of as forbidden.
 ### One origin, three kinds of URL
 
 ```
-/  /maps  /maps/:id  /maps/:id/versions     pages — the shell's client router
-/embed.html                                 the read-only page inside an iframe
+/  /maps  /maps/:id  /maps/:id/versions     pages — web/'s client router
+/embed/:tenant/:slug                        the reader, inside a publisher's iframe
+/assets/*  /embed-host.js                   the built front end
 /api/v1/*                                   the JSON API
 /auth/guest  /config  /health  /ready       public, outside the API
 /docs                                       reference, generated from the routes
@@ -365,9 +299,26 @@ included; nothing outside it needs an allowlist entry to be reachable. The
 earlier arrangement was one global hook and a set of exempt paths, which
 refused `/health?t=1` because it compared the raw URL.
 
-A page request that matches no file gets `index.html`; a miss under `/api/v1`
-is always JSON; a missing asset is a 404 rather than the shell with the wrong
-content type.
+A page request (GET or HEAD, no file extension) gets `index.html` with
+`cache-control: no-cache`; a miss under `/api/v1` is always JSON; a missing
+asset is a 404 rather than the shell with the wrong content type. Hashed files
+under `/assets/` are `public, max-age=31536000, immutable`.
+
+**Framing.** Every page is sent with `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'`, except `/embed/*`, which
+sends `frame-ancestors *`: the reader is the one page meant to live in someone
+else's frame. A publisher's snippet frames it with
+`sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"` and no
+`allow-same-origin`, so the reader runs at an opaque origin and every request it
+makes — scripts, styles, fonts, the MapLibre worker, `/config`, artifacts — is
+cross-origin; static files and `/config` send `Access-Control-Allow-Origin: *`.
+
+**Auto-height embeds.** `/embed-host.js` on the host page grows an embed whose
+URL carries `embedId` when the map's furniture does not fit its frame. Both
+sides validate: the frame reports only when its content overflows; the host
+accepts a message only from that iframe's window, from its origin (or the
+opaque `null`), with exactly the protocol's four fields, a bounded height, and
+only to grow (`web/src/embed/protocol.ts`).
 
 ### The role comes from the database on every request
 
@@ -415,8 +366,13 @@ cannot describe a request the server would refuse.
 The validator is configured to refuse rather than repair. Fastify's defaults
 remove properties a schema does not name and coerce `"5"` to `5`; both are off.
 
-The feature schema is a second copy of `core`'s TypeScript types, which have no
-runtime form. A test runs every template feature through it.
+The schemas are a second copy of `core`'s TypeScript types, which have no
+runtime form. What JSON Schema cannot express — closed rings, latitude within
+±90, unique ids in one save, a window that ends after it starts — is checked in
+`validate.ts`; whether every feature's group and preset exists is checked
+inside the save's transaction, against the whole map, after the write.
+Every refusal has one shape, `{ error, reason, retryAfter?, current? }`, with
+`Retry-After` mirrored into the body.
 
 ### Artifacts on R2
 
@@ -424,10 +380,38 @@ runtime form. A test runs every template feature through it.
 the in-memory store, both deliberate:
 
 - **The served ETag is R2's, not ours.** Ours is a hash of the map's content
-  and is kept as object metadata. The viewer echoes whatever validator it was
-  given and decides whether to re-render from the pointer's version number, so
-  it does not need them to match.
+  and is kept as object metadata. The reader echoes the HTTP `ETag` it was
+  given (not the etag inside the pointer's body) and decides whether to fetch
+  an artifact from the pointer's version number, so the two need not match.
 - **The server stops serving artifacts.** With R2 configured `/public/*` is not
   registered: it would be an unauthenticated proxy onto the bucket, on the
   process that holds the database pool. The read path not touching the
   database is then a property of the deployment, not a convention.
+
+### The bucket's CORS rule
+
+Readers fetch the pointer and artifacts cross-origin, the pointer
+conditionally. A conditional request with `cache-control` is not a simple
+request, so browsers preflight it, and the client must be able to read the
+`ETag` to send it back. The bucket needs this rule (R2's CORS JSON form; apply
+it in the infrastructure repository, not here):
+
+```json
+[
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["if-none-match", "cache-control"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 600
+  }
+]
+```
+
+This is the dashboard's JSON form (a top-level array of rules); Wrangler's file
+uses a different, nested shape. `OPTIONS` is not listed: it is the preflight
+itself, and the R2 documentation shows only GET/HEAD/PUT/POST/DELETE as methods.
+That R2 answers the preflight from this rule is **unverified** until it is
+applied to a real bucket — check a preflight with
+`curl -i -X OPTIONS -H "origin: https://example.org" -H "access-control-request-method: GET" -H "access-control-request-headers: if-none-match, cache-control" <pointer url>`.
+The local `/public/*` route answers the same preflight.
