@@ -2,19 +2,27 @@
 
 The front end for livemap: sign in, a workspace of maps, an editor for drawing live-event maps (areas, lines, movement arrows, front lines, icons and notes, in English or Arabic), version history with a visual diff and rollback, and the embeddable reader view that goes into an article.
 
-It is UI only. Everything runs against an in-memory mock of the API (`src/api/mock/`) behind the `ApiClient` interface, and the map is drawn by MapLibre behind the `EditorController` interface. `INTEGRATION.md` says how to replace both.
+A production build talks to the livemap API (`packages/api`) through `src/api/http.ts` and reads published maps straight from where the server says they are served. `npm run dev` runs the same screens over an in-memory mock (`src/api/mock/`) behind the same `ApiClient` interface, with seed maps, personas and the `/dev` pages. The map is drawn by one WebGL layer inside MapLibre (`src/render/`), shared by the editor, the embed and image export. `INTEGRATION.md` says how it is wired to the server.
 
 ## Requirements
 
-- Node 22.22 or newer. The pinned toolchain (Vite 8, react-router 8) refuses Node 20. `.node-version` says `24.22.2`, which is what the project is built with.
+- Node 24 (`.node-version` at the repo root). This is an npm workspace: run `npm install` at the repo root.
 - A browser with WebGL.
 
 ## Run it
 
 ```bash
-npm install
-npm run dev          # http://localhost:5180
+npm install                        # at the repo root
+npm run dev -w @livemap/web        # http://localhost:5180, over the mock
 ```
+
+Against a running server (`npm run serve` or `npm run demo` at the repo root), through Vite's proxy:
+
+```bash
+VITE_API=http LIVEMAP_API=http://127.0.0.1:8800 npm run dev -w @livemap/web
+```
+
+In production the server serves `dist/` itself; see the repo's `docs/architecture.md` §9.
 
 Other scripts:
 
@@ -25,7 +33,7 @@ npm run preview      # serve dist/ on http://localhost:5181
 npm run screenshots  # the screenshot matrix (see below)
 ```
 
-The production build needs a server that answers every route with `index.html` and, for the embed, sends `Access-Control-Allow-Origin: *`; see "What production needs" in `INTEGRATION.md`.
+A production build always uses the real API and leaves out the mock and the `/dev` pages.
 
 ## Routes
 

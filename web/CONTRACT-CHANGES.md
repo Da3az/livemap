@@ -659,3 +659,32 @@ These are not changes. They are places where the contract as it stands leaves th
 - **No code for an invalid request.** A feature with an open ring or a save with an unknown `groupId` has no error code to come back with; today's 400 would arrive as an unrecognised error.
 - **No delete.** A map can be archived but not deleted, so a full guest workspace can only make room by archiving. The mock therefore does not count archived maps against `maxMaps`; the real rule is the server's to state.
 - **`MapVersion` requires `hidden` and `locked`** because it reuses `MapFeature`. They are always `false` in an artifact. A separate published-feature type without them would be more exact.
+
+---
+
+## As implemented (integration, 2026-11-22)
+
+The server now speaks this contract; the shapes live once, in `@livemap/core`
+(`packages/core/src/model.ts` and `api.ts`), and the server validates them with
+`packages/api/src/schemas.ts`. Where the implementation departs from an entry
+above, this section wins.
+
+| Entry | As implemented |
+|---|---|
+| 3 Groups | `FeatureGroup.collapsed` is gone. Folding a group is each person's own view, kept in their browser (`localStorage`, per map), never saved and never an undo step. `hidden` and `locked` stay shared. |
+| 8 `updatedBy` | A display name, resolved by the server from the user who saved; "Former member" for someone no longer in the workspace. Values a client sends are accepted by the schema and overwritten. |
+| 18 `meta` | Dropped. |
+| 29 Archived | Only owners and admins archive or restore (`map:archive`). An archived map stays readable (`archived: true`) and refuses edits and publishes with 403 and a reason. Archived maps do not count toward `maxMaps`; restoring at the limit is `quota_exceeded`. Archive and unarchive answer 204. |
+| 31 Settings with the edit | `settings` in an edit is a **patch** (`SettingsPatch`): a section present (`basemap`, `openingView`, `legend`, `titleBlock`, `timeline`, `embed`) replaces that section; `presets` and `groups` change item by item as `{ put, delete }`. `force` overwrites only what the request names. After every save the server checks that each feature's group and preset exists, across the whole map. |
+| 33 Stale revision | `current.updatedBy` is a name; the refusal also carries a `reason` ("… saved this map after you opened it."). |
+| 35 Unchanged | The hash is over the built artifact (`publishHash(buildArtifact(…))`) minus its version number and publish time, so it covers exactly what readers receive. An empty group or an unused preset changes nothing for a reader and mints no version. |
+| 36 Artifact | Features in an artifact omit `updatedAt` and `updatedBy` (`PublishedFeature`); `hidden` and `locked` are false. Only groups that published features belong to are kept; presets that nothing published uses and no visible legend entry names are left out. The front end's `MapVersion` restores whole features at the client boundary (`fromArtifact`). |
+| 38 Origin | Every version also records `sourceRev` server-side, so a rollback to a rollback still knows which draft revision is live. |
+| 40/48 Pointer | Body `{ version, url, etag, cacheControl, updatedAt }`, where `etag` is the artifact's. A reader sends back the pointer's **HTTP** `ETag`, which the store sets, as `If-None-Match`. Keys are `t/{tenant}/m/{slug}/latest.json` and `t/{tenant}/m/{slug}/v/{n}.json`. A 404 pointer (no map, or never published) reads as "nothing is published here". |
+| 43 Errors | One more code, `invalid_request` (400), for a body that breaks the contract or a rule JSON Schema cannot state (rings closed, latitude, unique ids, references). Every refusal carries `reason`; 429 and 503 mirror `Retry-After` into `retryAfter`. An expired token answers 401 with a reason that says so. |
+| 44 Templates | Held by the server (`TEMPLATES` in core); `GET /api/v1/templates` answers `{ templates }`. |
+| 45 Session | `GET /api/v1/session`. `capabilities` holds only the five the interface uses. |
+| 46 Config | `AppConfig` adds `specimen: { tenantSlug, mapSlug } \| null`, the published map the sign-in page shows (server setting `SPECIMEN_MAP`). |
+| 42 Place search | `GET /api/v1/places?q=&lang=` answers `{ places }`, from the built-in gazetteer until a geocoder is chosen. |
+| Guest signup | `POST /auth/guest` takes `{ turnstileToken }` and answers `{ token, tenantSlug, expiresAt }`; the client stores the token and asks for the session. Signup switched off answers 403 `guest_signup_disabled`. |
+| List | `GET /api/v1/maps?archived=true\|false` answers `{ maps }`. |

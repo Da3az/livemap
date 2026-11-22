@@ -98,3 +98,21 @@ Four read-only reviews of the plan found blockers; the user accepted every recom
 | R.5 | Archive rights and archived maps | Follow the UI: owners and admins archive (`map:archive`); archived maps do not count toward `maxMaps`; an archived map stays readable and refuses edits with a reason. Server grid and policies change to match |
 | R.6 | `meta` on features (CC 18) | Dropped |
 | R.7 | Uncommitted earlier work | Committed first, by area, before integration work; `web/screenshots` (regenerable) is not committed |
+
+## Integration — taken while building (Claude, 2026-11-22, under "implement all phases, don't stop")
+
+| # | Question | Taken | Why |
+|---|---|---|---|
+| I.1 | When to remove the four old packages | First, right after copying out the iframe protocol, the poller's backoff and the Turnstile loader | Changing `core` to the new model would otherwise have meant keeping four dead packages compiling against it. Removed only after a repository search showed no importers outside them; `demo/` was rebuilt on web/ |
+| I.2 | Where templates and the gazetteer live | In `@livemap/core`, used by the server and by the mock | One copy each; the mock offers exactly what the server does |
+| I.3 | An artifact's features carry no `updatedAt`/`updatedBy`, but the drawing, legend and diff code take `MapFeature` | The front end's `MapVersion` holds whole features; the client converts at its boundary (`fromArtifact`) | Keeps the published artifact free of editor data without widening every drawing signature |
+| I.4 | What the reader sends as `If-None-Match` | The pointer's HTTP `ETag`, not the etag in its body | An object store computes its own validator; the body's etag is the artifact's |
+| I.5 | The harvested iframe height protocol against an embed that fills its frame | The frame reports only when its content overflows; the host only grows the frame and validates sender window, origin, shape and bound. The Embed tab's snippet is unchanged; `embed-host.js` is opt-in | Reporting the document's height would echo the frame's own height forever; the snippet is part of the approved design |
+| I.6 | A pointer that is missing (no map, or never published) | The embed's "nothing is published here" statement | A static store answers 404 for both and cannot tell them apart |
+| I.7 | The sign-in page's specimen pointed at a mock-only map | A server setting, `SPECIMEN_MAP`, reported in `/config`; none means no picture | A real deployment has no such map |
+| I.8 | What an artifact keeps of groups and presets | Only groups that published features belong to, and presets a published feature uses or a visible legend entry names | An empty group or unused preset tells a reader nothing and would otherwise mint a version |
+| I.9 | Where feature labels go in the WebGL layer's order | After all shapes, as today's canvas output draws them; notes keep their place in the order | R.2 makes today's output the reference |
+| I.10 | A dependency for polygon triangulation | `earcut` (ISC), already installed through MapLibre | No stencil buffer (MapLibre issue #3536); holes need triangulating |
+| I.11 | Guest workspace lifetime: 7 days (server) or 24 hours (mock) | The server's 7 days, unchanged; the mock still says 24 hours | **Open — the user's call** |
+| I.12 | How the workspace packages are compiled | From source, through a `livemap-source` export condition (TypeScript, Vite and `node --conditions`) | The front end and the server never run a stale build of `core` |
+| I.13 | The existing API tests, written against the old contract | Left as they are, not run, not edited | The user asked for no tests to be written, and a failing test may not be edited without the user's OK |
