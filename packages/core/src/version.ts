@@ -61,8 +61,9 @@ export interface Publishable {
 
 /**
  * What a reader receives for a draft. Left out: hidden features, features in
- * a hidden group, hidden groups, legend entries for what was left out or that
- * the author hid, and who changed each feature and when. `hidden` and `locked`
+ * a hidden group, groups nothing published belongs to, presets nothing
+ * published uses or the legend names, legend entries for what was left out or
+ * that the author hid, and who changed each feature and when. `hidden` and `locked`
  * are reset on what remains, as nothing is hidden or locked for a reader.
  * Features are sorted by draw order so the artifact is byte-stable whatever
  * order rows came back in.
@@ -78,6 +79,7 @@ export function buildArtifact(draft: Publishable, version: number, publishedAt: 
       return { ...rest, hidden: false, locked: false } as PublishedFeature;
     });
   const published = new Set(features.map((feature) => feature.id));
+  const usedGroups = new Set(features.map((feature) => feature.groupId).filter((id): id is string => id !== null));
   const usedPresets = new Set(features.map((feature) => feature.presetId).filter((id): id is string => id !== null));
   const legendPresets = new Set(
     draft.settings.legend.items.flatMap((item) => ("presetId" in item.ref && !item.hidden ? [item.ref.presetId] : [])),
@@ -86,7 +88,10 @@ export function buildArtifact(draft: Publishable, version: number, publishedAt: 
     ...draft.settings,
     /* A preset nothing published uses, and no legend entry names, would only tell a reader about the draft. */
     presets: draft.settings.presets.filter((preset) => usedPresets.has(preset.id) || legendPresets.has(preset.id)),
-    groups: draft.settings.groups.filter((group) => !group.hidden).map((group) => ({ ...group, hidden: false, locked: false })),
+    /* Only groups something published belongs to: an empty group tells a reader nothing and would mint a version. */
+    groups: draft.settings.groups
+      .filter((group) => !group.hidden && usedGroups.has(group.id))
+      .map((group) => ({ ...group, hidden: false, locked: false })),
     legend: {
       ...draft.settings.legend,
       items: draft.settings.legend.items.filter(

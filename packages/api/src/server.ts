@@ -296,11 +296,15 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         res.header("x-content-type-options", "nosniff");
         // Vite content-hashes everything under assets/, so it can never change
         // under a cached copy. Anything else at the root keeps a stable name.
+        // index.html must revalidate on every load, or a deploy stays
+        // invisible until caches expire; the fallback below sends it.
         res.header(
           "cache-control",
           /[\\/]assets[\\/]/.test(path)
             ? "public, max-age=31536000, immutable"
-            : "public, max-age=300",
+            : /index\.html$/.test(path)
+              ? "no-cache"
+              : "public, max-age=300",
         );
       },
     });
