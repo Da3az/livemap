@@ -12,37 +12,35 @@
       .byline { font: 13px ui-sans-serif, system-ui; color: #6b6257;
                 text-transform: uppercase; letter-spacing: .06em; margin-block-end: 28px; }
       figure { margin: 32px 0; }
-      figcaption { font: 13px ui-sans-serif, system-ui; color: #6b6257; margin-block-start: 8px; }
-      iframe { width: 100%; border: 1px solid #ddd5c9; }
       .back { font: 13px ui-sans-serif, system-ui; }
     </style>
   </head>
   <body>
     <div class="col">
       <p class="back"><a href="/">← livemap</a></p>
-      <h1>Fighting spreads east of the river as armoured column advances</h1>
-      <p class="byline">Demo article · 7 November 2026</p>
+      <h1>Cyclone Shaheen comes ashore on Oman's Batinah coast</h1>
+      <p class="byline">Demo article</p>
       <p>
-        The map below is a sandboxed iframe. It reports its own height to this
-        page over <code>postMessage</code>, and this page resizes it — the same
-        protocol every incumbent ships, reimplemented here rather than taking
-        a dependency on an unmaintained library.
+        The map below is the published map in a sandboxed iframe, the way a
+        publisher pastes it from the Embed tab. It polls a small pointer file
+        and redraws when the newsroom publishes again; publish a change in the
+        editor and watch it arrive here within seconds.
       </p>
       <figure>
-        <iframe id="lm" src="/embed.html?t=demo-news&m=levant-tracker&embedId=demo1&static=1"
-                title="Levant tracker" loading="lazy"
-                sandbox="allow-scripts allow-popups" style="height:460px"></iframe>
-        <figcaption>Contested and held areas, front line, and reported incidents.</figcaption>
+        <iframe id="lm" src="/embed/al-mashriq/cyclone-shaheen?embedId=demo1"
+                title="Cyclone Shaheen" loading="lazy"
+                style="width:100%;aspect-ratio:4/3;min-height:420px;border:0"
+                allow="fullscreen"
+                sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                referrerpolicy="strict-origin-when-cross-origin"></iframe>
       </figure>
       <p>
-        Resize this window — the frame reports a new height and the embed
-        follows. The host validates the message on frame identity, not just
-        origin, so another frame on this page cannot drive the resize.
+        <code>embed-host.js</code> on this page grows the frame when the map's
+        title, key and credits need more room than the frame gives them. It
+        checks every resize message against the frame that sent it, its shape
+        and a height ceiling, so nothing else on the page can drive it.
       </p>
     </div>
-    <script type="module">
-      import { startEmbedParent } from "/embed-host.js";
-      startEmbedParent({ id: "demo1", iframe: document.getElementById("lm") });
-    </script>
+    <script type="module" src="/embed-host.js"></script>
   </body>
 </html>

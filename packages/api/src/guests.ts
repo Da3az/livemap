@@ -87,7 +87,7 @@ export class MemoryGuestProvisioner implements GuestProvisioner {
 
   async provision(): Promise<GuestIdentity> {
     const g = newGuest();
-    this.repo.grant(g.tenantId, g.userId, g.role);
+    this.repo.grant(g.tenantId, g.userId, g.role, { user: "Guest", tenant: "Guest workspace" });
     this.n++;
     return {
       userId: g.userId,

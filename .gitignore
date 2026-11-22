@@ -11,3 +11,9 @@ claude-plans/
 # loadtest/RESULTS.md.
 loadtest/results/
 
+demo/shots/
+
+# Local-only: Claude Code settings and worktrees, and the working notes.
+.claude/
+/CLAUDE.md
+/web/CLAUDE.md
