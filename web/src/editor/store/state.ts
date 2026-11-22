@@ -69,6 +69,8 @@ export interface ViewState {
   readonly reshapingId: string | null;
   readonly paletteOpen: boolean;
   readonly shortcutSheetOpen: boolean;
+  /** Groups folded in this person's list. Not part of the map: each person folds their own. */
+  readonly collapsedGroups: ReadonlySet<string>;
 }
 
 /** One undo step. `label` is what the Edit menu shows after "Undo". */

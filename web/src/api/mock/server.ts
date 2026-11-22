@@ -4,6 +4,7 @@
  * failures and cloning of results are added around it in `index.ts`.
  */
 import type { ApiClient, EditRequest, PublishedPointerResult, PublishResult } from "@/api/client";
+import { applySettingsPatch } from "@livemap/core";
 import { compareOrder } from "@/model/order";
 import type {
   AppConfig,
@@ -214,7 +215,7 @@ export const server: Sync<ApiClient> = {
     }
 
     world.features.set(id, [...next.values()]);
-    if (edit.settings) map.doc.settings = edit.settings;
+    if (edit.settings) map.doc.settings = applySettingsPatch(map.doc.settings, edit.settings);
     if (edit.title) map.doc.title = edit.title;
     if (edit.uiDir) map.doc.uiDir = edit.uiDir;
     map.doc.rev += 1;

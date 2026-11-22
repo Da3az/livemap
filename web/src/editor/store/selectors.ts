@@ -134,7 +134,7 @@ function rowFor(feature: MapFeature, group: FeatureGroup | null, presets: Preset
 }
 
 const listTree = memoLast(
-  (ordered: MapFeature[], groups: readonly FeatureGroup[], presets: PresetLookup): ListTree => {
+  (ordered: MapFeature[], groups: readonly FeatureGroup[], presets: PresetLookup, collapsedGroups: ReadonlySet<string>): ListTree => {
     const byId = new Map<string, { group: FeatureGroup; features: FeatureRow[] }>();
     for (const group of sortKeyed(groups)) byId.set(group.id, { group, features: [] });
     const ungrouped: FeatureRow[] = [];
@@ -153,7 +153,7 @@ const listTree = memoLast(
         name: group.name,
         hidden: group.hidden,
         locked: group.locked,
-        collapsed: group.collapsed,
+        collapsed: collapsedGroups.has(group.id),
         features,
       });
       for (const row of features) flatIds.push(row.id);
@@ -168,7 +168,7 @@ const listTree = memoLast(
  * features. Within each, rows read topmost first, so the top row draws on top.
  */
 export function selectListTree(state: EditorState): ListTree {
-  return listTree(selectDrawOrder(state), state.doc.settings.groups, selectPresetLookup(state));
+  return listTree(selectDrawOrder(state), state.doc.settings.groups, selectPresetLookup(state), state.view.collapsedGroups);
 }
 
 /* ----------------------------------------------------------------- legend */

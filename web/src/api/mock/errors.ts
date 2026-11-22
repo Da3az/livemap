@@ -11,6 +11,7 @@ interface ErrorDefaults {
 }
 
 export const ERROR_DEFAULTS: Record<ApiErrorCode, ErrorDefaults> = {
+  invalid_request: { status: 400, reason: "The request does not match what the server accepts.", retryAfter: null },
   unauthorised: { status: 401, reason: "You are not signed in, or the session has ended.", retryAfter: null },
   forbidden: { status: 403, reason: "Your role in this workspace does not allow this.", retryAfter: null },
   quota_exceeded: { status: 403, reason: "This workspace has reached its limit.", retryAfter: null },
@@ -26,6 +27,7 @@ export const ERROR_DEFAULTS: Record<ApiErrorCode, ErrorDefaults> = {
 };
 
 export const ERROR_CODES: ApiErrorCode[] = [
+  "invalid_request",
   "unauthorised",
   "forbidden",
   "quota_exceeded",

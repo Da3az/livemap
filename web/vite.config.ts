@@ -1,13 +1,15 @@
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // Several dev servers at once must not share one optimiser cache.
   cacheDir: process.env.VITE_CACHE_DIR ?? "node_modules/.vite",
   resolve: {
+    /* Workspace packages are compiled from source, so the front end never runs a stale build of @livemap/core. */
+    conditions: ["livemap-source", ...defaultClientConditions],
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
     dedupe: ["react", "react-dom", "maplibre-gl"],
   },

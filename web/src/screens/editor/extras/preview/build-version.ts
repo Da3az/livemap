@@ -1,5 +1,7 @@
+import { buildArtifact } from "@livemap/core";
 import { sortKeyed, type Doc, type MapMeta } from "@/editor/store";
-import type { MapFeature, MapSettings, MapVersion } from "@/model/types";
+import { fromArtifact } from "@/model/published";
+import type { MapFeature, MapVersion } from "@/model/types";
 
 /** What the draft would publish, and what it would leave behind. */
 export interface DraftArtifact {
@@ -9,38 +11,16 @@ export interface DraftArtifact {
 }
 
 /**
- * The artifact the draft on screen would become, built the way the publish
- * pipeline builds it: hidden features and features in hidden groups are left
- * out, and what exists only for the editor (hidden, locked, collapsed) is
- * reset on everything that remains.
+ * The artifact the draft on screen would become, built by the very function
+ * the server publishes with, so the preview cannot disagree with the result.
  */
 export function draftArtifact(doc: Doc, meta: MapMeta, publishedAt: string): DraftArtifact {
-  const hiddenGroups = new Set(doc.settings.groups.filter((group) => group.hidden).map((group) => group.id));
-  const features: MapFeature[] = [];
-  const leftOut: MapFeature[] = [];
-  for (const feature of sortKeyed(doc.features.values())) {
-    if (feature.hidden || (feature.groupId !== null && hiddenGroups.has(feature.groupId))) leftOut.push(feature);
-    else features.push({ ...feature, hidden: false, locked: false });
-  }
-  const published = new Set(features.map((feature) => feature.id));
-  const settings: MapSettings = {
-    ...doc.settings,
-    groups: doc.settings.groups.filter((group) => !group.hidden).map((group) => ({ ...group, hidden: false, locked: false, collapsed: false })),
-    legend: {
-      ...doc.settings.legend,
-      items: doc.settings.legend.items.filter((item) => !("featureId" in item.ref) || published.has(item.ref.featureId)),
-    },
-  };
-  return {
-    version: {
-      mapId: meta.id,
-      version: (meta.publishedVersion ?? 0) + 1,
-      title: doc.title,
-      uiDir: doc.uiDir,
-      settings,
-      features,
-      publishedAt,
-    },
-    leftOut,
-  };
+  const features = sortKeyed(doc.features.values());
+  const artifact = buildArtifact(
+    { mapId: meta.id, title: doc.title, uiDir: doc.uiDir, settings: doc.settings, features },
+    (meta.publishedVersion ?? 0) + 1,
+    publishedAt,
+  );
+  const published = new Set(artifact.features.map((feature) => feature.id));
+  return { version: fromArtifact(artifact), leftOut: features.filter((feature) => !published.has(feature.id)) };
 }

@@ -26,6 +26,7 @@ export function saveStateFromError(error: unknown, nowMs: number, featureCount: 
       return { kind: "offline" };
     case "body_too_large":
       return { kind: "too_large", featureCount };
+    case "invalid_request":
     case "human_check_failed":
     case "guest_signup_disabled":
     case "not_found":
@@ -53,6 +54,7 @@ export function publishStateFromError(error: unknown, nowMs: number): PublishSta
       return { kind: "offline" };
     case "stale_revision":
     case "body_too_large":
+    case "invalid_request":
     case "human_check_failed":
     case "guest_signup_disabled":
     case "not_found":

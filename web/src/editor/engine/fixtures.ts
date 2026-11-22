@@ -56,8 +56,8 @@ export function fixtureSettings(dir: "ltr" | "rtl"): MapSettings {
       { id: "preset-unused", name: text("Power cut", "انقطاع الكهرباء"), appliesTo: ["area"], fill: { color: { slot: 7 }, opacity: 0.4, pattern: "none" } },
     ],
     groups: [
-      { id: "group-impact", name: text("Impact", "الأضرار"), order: "a", hidden: false, locked: false, collapsed: false },
-      { id: "group-drafts", name: text("Drafts", "مسودات"), order: "b", hidden: true, locked: false, collapsed: false },
+      { id: "group-impact", name: text("Impact", "الأضرار"), order: "a", hidden: false, locked: false },
+      { id: "group-drafts", name: text("Drafts", "مسودات"), order: "b", hidden: true, locked: false },
     ],
     legend: { show: true, title: text("Key", "مفتاح الخريطة"), position: "bottom-start", items: [] },
     titleBlock: {

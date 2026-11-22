@@ -2,14 +2,14 @@
   "name": "@livemap/core",
   "version": "0.1.0",
   "private": true,
-  "description": "Domain model and annotation geometry engine. Pure, dependency-free, Node-testable.",
+  "description": "The livemap domain model, API shapes and publish rules. Pure and dependency-free; shared by web/ and the API.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
+      "livemap-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -19,7 +19,6 @@
   ],
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --platform=neutral --outfile=dist/index.js --sourcemap && tsc -p tsconfig.json --emitDeclarationOnly",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

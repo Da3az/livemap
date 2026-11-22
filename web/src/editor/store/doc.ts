@@ -1,4 +1,5 @@
 import type { EditRequest } from "@/api/client";
+import { settingsPatch, type SettingsPatch } from "@livemap/core";
 import type { IsoDateTime, MapDoc, MapFeature, MapSettings, RichText } from "@/model/types";
 import { sortKeyed } from "./ordering";
 
@@ -216,8 +217,8 @@ export interface ChangeSet {
   put: MapFeature[];
   /** Ids deleted since the last save. */
   delete: string[];
-  /** The settings, when any of them changed; otherwise null. */
-  settings: MapSettings | null;
+  /** The parts of the settings that changed, when any did; otherwise null. */
+  settings: SettingsPatch | null;
   title: RichText | null;
   uiDir: UiDir | null;
   /** True when there is nothing to save. */
@@ -235,7 +236,7 @@ export function changeSet(baseline: Doc, doc: Doc): ChangeSet {
     }
     for (const id of baseline.features.keys()) if (!doc.features.has(id)) removed.push(id);
   }
-  const settings = doc.settings !== baseline.settings && !deepEqual(doc.settings, baseline.settings) ? doc.settings : null;
+  const settings = doc.settings === baseline.settings ? null : settingsPatch(baseline.settings, doc.settings);
   const title = deepEqual(doc.title, baseline.title) ? null : doc.title;
   const uiDir = doc.uiDir === baseline.uiDir ? null : doc.uiDir;
   return {

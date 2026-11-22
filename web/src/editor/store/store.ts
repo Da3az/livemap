@@ -122,6 +122,28 @@ function pruneSelection(selection: Selection, doc: Doc): Selection {
   return { ids, groupId };
 }
 
+const COLLAPSED_KEY = (mapId: string): string => `livemap.collapsed-groups.${mapId}`;
+
+/** Storage can be blocked (a sandboxed frame, a privacy mode); folding then lasts for the visit. */
+function readCollapsedGroups(mapId: string): ReadonlySet<string> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_KEY(mapId));
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCollapsedGroups(mapId: string, ids: ReadonlySet<string>): void {
+  try {
+    if (ids.size === 0) window.localStorage.removeItem(COLLAPSED_KEY(mapId));
+    else window.localStorage.setItem(COLLAPSED_KEY(mapId), JSON.stringify([...ids]));
+  } catch {
+    /* Folding still works for this visit. */
+  }
+}
+
 function lockedGroups(settings: MapSettings): Set<string> {
   return new Set(settings.groups.filter((group) => group.locked).map((group) => group.id));
 }
@@ -273,6 +295,7 @@ export class EditorStore {
         reshapingId: null,
         paletteOpen: false,
         shortcutSheetOpen: false,
+        collapsedGroups: readCollapsedGroups(map.id),
       },
       history: { undo: [], redo: [] },
       save: { kind: "idle" },
@@ -777,7 +800,6 @@ export class EditorStore {
           order: allocation.keys[0] ?? "V",
           hidden: false,
           locked: false,
-          collapsed: false,
         };
         draft.settings = {
           ...draft.settings,
@@ -1254,14 +1276,20 @@ export class EditorStore {
     return this.editGroup(label, groupId, (group) => (group.locked === locked ? group : { ...group, locked }));
   }
 
-  /** Fold or unfold a group in the list. Saved with the map, but not an undo step. */
+  /**
+   * Fold or unfold a group in the list. Folding is each person's own view, so
+   * it is kept in this browser, never saved with the map and never an undo step.
+   */
   setGroupCollapsed(groupId: string, collapsed: boolean): CommandResult {
-    return this.editGroup(
-      bi("Collapse group", "طي المجموعة"),
-      groupId,
-      (group) => (group.collapsed === collapsed ? group : { ...group, collapsed }),
-      { history: false },
-    );
+    if (!this.state.doc.settings.groups.some((group) => group.id === groupId)) return { ok: false, refusal: { code: "not_found", what: "group" } };
+    const current = this.state.view.collapsedGroups;
+    if (current.has(groupId) === collapsed) return OK_UNCHANGED;
+    const next = new Set(current);
+    if (collapsed) next.add(groupId);
+    else next.delete(groupId);
+    writeCollapsedGroups(this.state.meta.id, next);
+    this.set({ view: { ...this.state.view, collapsedGroups: next } });
+    return OK_CHANGED;
   }
 
   /* ---------------------------------------------------------------- groups */
@@ -1288,7 +1316,6 @@ export class EditorStore {
           order: allocation.keys[0] ?? "V",
           hidden: false,
           locked: false,
-          collapsed: false,
         };
         draft.settings = {
           ...draft.settings,
