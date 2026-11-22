@@ -6,10 +6,12 @@ import type { MapLibreMap } from "@/render/maplibre";
 import type { Palette } from "@/render/palette";
 
 /**
- * Fetches, restyles and sets the basemap. Everything the author drew lives
- * on canvases above the map, outside its style, so a style change cannot
- * drop it and no call can arrive while "the style is not done loading".
- * The latest request wins; an older fetch that finishes late is ignored.
+ * Fetches, restyles and sets the basemap. The features are a custom layer
+ * inside the style, so a style change drops them; the renderer's own layer
+ * owner (render/gl/feature-layer.ts) puts the layer back on every style load
+ * and after a lost context, so nothing here has to. Selection and handles
+ * stay on a canvas above the map. The latest request wins; an older fetch
+ * that finishes late is ignored.
  */
 export class BasemapSync {
   private request = 0;
