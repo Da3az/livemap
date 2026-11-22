@@ -1,10 +1,9 @@
 # livemap — data model
 
-**Status: DESIGN ONLY. No migration has been written or run.**
-
-Per the project's working agreement, database migrations require explicit
-approval before they are created or executed. This document is the proposal to
-approve. Section 7 states exactly what the first migration would do.
+**Status: built.** Migrations 0001–0004 are written, approved and applied.
+Sections 1–8 are the original design and its reasoning; **§9 is the schema as
+it now stands**, and wins wherever the two differ. Every migration needs the
+owner's approval before it is written or run.
 
 ---
 
@@ -285,3 +284,43 @@ data to lose. The reversible-down migration drops the same objects.
    cleanly rather than degrade.
 4. **Asset storage for custom icons** — tenant-scoped SVG uploads need
    sanitising (SVG is an XSS vector) and a size cap.
+
+---
+
+## 9. As built (migrations 0001–0004)
+
+| Migration | What it did |
+|---|---|
+| `0001_init` | Tenants, users, memberships, themes, assets, maps, features, map_versions, publish_requests, feeds; RLS on every tenant table; the `livemap_app` and `livemap_migrator` roles |
+| `0002_role_aware_rls` | Role-aware policies (`livemap_granted_role()`, contributor ownership), the `livemap_admin` role |
+| `0003_document_model` | The front end's document model (below). Discarded the maps that existed, as approved |
+| `0004_version_origin_and_archive` | Version origin and source revision; archiving restricted to owners and admins; an archived map's features read-only |
+
+**maps** — `settings jsonb` holds the whole `MapSettings` (opening view, basemap
+and label language, presets, groups, legend, title block, timeline, embed
+options): a JSON object of at most 256 KB. It replaced `center`, `zoom`,
+`bearing`, `pitch`, `basemap_style_id` and `label_langs`. `updated_by` (who last
+saved), `published_rev` (the draft revision the live version was built from;
+null or between 0 and `rev`, and only with a `published_version`). `ui_dir` is
+`ltr` or `rtl`. Settings are map-level and bounded; features stay one row each.
+They change by patch (core's `SettingsPatch`), applied under the row lock the
+revision guard takes.
+
+**features** — `order_key` (was `at`), and as columns because the server acts on
+them: `group_id`, `preset_id`, `lineage_id`, `hidden`, `locked`, `valid_from`,
+`valid_to` (`valid_to >= valid_from`). `updated_by` is required. `geom` holds the
+geography (Polygon for areas, LineString for lines, arrows' control points and
+front lines, Point for points and annotation anchors); `props` holds the rest of
+the feature as the model defines it. Indexed by `(map_id, order_key)` and
+`(map_id, group_id)`. Whether each feature's group and preset exist in the
+map's settings is checked in the save's transaction, across the whole map.
+
+**map_versions** — `source_rev` (the draft revision the content came from; a
+rollback copies its source's), `origin_type` (`publish` or `rollback`),
+`origin_from_version` (set exactly for a rollback). Still append-only: no update
+or delete policy.
+
+**Archive rights** — the trigger `maps_guard_archive` refuses a change to
+`archived_at` on the request path unless the caller is an owner or admin;
+`livemap_can_edit_map()` answers false for an archived map, so its features
+refuse every write.
