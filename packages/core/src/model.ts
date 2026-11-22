@@ -223,6 +223,8 @@ export interface MapSettings {
   embed: {
     legend: boolean;
     zoomButtons: boolean;
+    /** Buttons that move the map up, down, left and right, so it can be panned without dragging. */
+    panButtons: boolean;
     scaleBar: boolean;
     /** require a modifier key or two fingers to zoom, so the page still scrolls */
     cooperativeGestures: boolean;

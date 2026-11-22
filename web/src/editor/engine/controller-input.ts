@@ -4,9 +4,12 @@ import type { FeatureRenderer } from "@/render/feature-renderer";
 import type { MapLibreMap } from "@/render/maplibre";
 import type { Emitter } from "./emitter";
 import { attachPointerInput, type PointerSample } from "./input";
+import { arrowDirection } from "./select-tool";
 import type { Tool } from "./tool";
 
 const HOVER_TOLERANCE = 4;
+/** How far an arrow key pans the map, in CSS pixels. */
+const PAN_STEP = 100;
 
 export interface InputWiring {
   map: MapLibreMap;
@@ -81,6 +84,15 @@ export function wireInput(wiring: InputWiring): () => void {
   const onKey = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (tool()?.key(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    /* Arrow keys the tool did not want pan the map: west on the left whatever the page's direction. */
+    const direction = arrowDirection(event.key);
+    if (direction) {
+      const step = event.shiftKey ? PAN_STEP * 3 : PAN_STEP;
+      map.panBy([direction.x * step, direction.y * step], { duration: 150 });
       event.preventDefault();
       event.stopPropagation();
     }

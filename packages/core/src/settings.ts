@@ -83,3 +83,22 @@ export function applySettingsPatch(settings: MapSettings, patch: SettingsPatch):
     groups: applyKeyed(settings.groups, patch.groups),
   };
 }
+
+const EMBED_DEFAULTS: MapSettings["embed"] = {
+  legend: true,
+  zoomButtons: true,
+  panButtons: true,
+  scaleBar: true,
+  cooperativeGestures: true,
+  static: false,
+  theme: "auto",
+};
+
+/**
+ * Settings as stored may predate a field the model has since gained; reading
+ * them fills each missing field with its default, so every map has the whole
+ * shape. Settings are one jsonb column, so a new field needs no migration.
+ */
+export function normaliseSettings(settings: MapSettings): MapSettings {
+  return { ...settings, embed: { ...EMBED_DEFAULTS, ...settings.embed } };
+}

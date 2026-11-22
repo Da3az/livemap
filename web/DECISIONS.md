@@ -122,3 +122,17 @@ Four read-only reviews of the plan found blockers; the user accepted every recom
 | # | Question | Chosen |
 |---|---|---|
 | F.1 | Place search (P1 in RESEARCH.md, accepted in 1.1) needs a geocoder to be useful | **Removed entirely** for now: the editor's search box, the palette's "Go to a place" entries, adding a result as an icon, `searchPlaces`, `/api/v1/places` and the built-in gazetteer. Authors find a place by panning. A geocoder can bring it back later (research kept in the private planning notes) |
+
+## Editor interactions (user, 2026-11-22)
+
+From a study of map tools, design tools and WCAG 2.2 (private planning notes, `interactions-study.md`). The user's revised table is the specification; these are their answers to its open questions.
+
+| # | Question | Chosen |
+|---|---|---|
+| X.A | Tool after finishing a shape | Every tool returns to Select; **Q** or a visible lock button keeps it active (double-clicking the tool as a secondary way). One rule, easy to find; matches tldraw and Excalidraw |
+| X.B | Moving a feature | **Select first, then drag, for every kind.** An accidental move on a live news map is a factual error. A "Move, then tap the destination" command is the no-drag alternative |
+| X.C | Rotate and tilt | **Off in the editor and the embed, in every gesture** (drag, keyboard, twist, tilt). Bearing and pitch are set in Map settings |
+| X.D | Freehand, drag handles for rotate/resize | Later. **Typed rotation and size fields now** |
+| X.E | Panning without dragging | **A compact pan pad next to the zoom buttons, in the editor and the embed; authors can hide it in the embed.** Meets WCAG 2.2 SC 2.5.7 (keyboard panning alone does not) |
+
+The rest of the revised table stands as written: touch double-tap never finishes a shape; arrows by press-drag or clicks with a one-time hint; an on-map bend handle with presets; Space or middle-button drag pans where a drag draws; one-click text with an offset that flips for right-to-left and near edges; arrow keys move a selection (1 px, Shift 10) and otherwise pan; a right-click menu on the map; keyboard drawing with a centre crosshair and labelled buttons; undo and redo of points while drawing; automatic pen mode with a toggle; no drawing dock on phones; fullscreen and reset-view buttons in the embed.

@@ -219,6 +219,12 @@ export class ReaderMap {
     this.map.easeTo({ zoom: this.map.getZoom() + steps, duration: 200 });
   }
 
+  /** Move the view by a share of the map's size: x east, y south. The no-drag way to pan. */
+  panBy(x: number, y: number): void {
+    const canvas = this.map.getContainer();
+    this.map.panBy([x * canvas.clientWidth, y * canvas.clientHeight], { duration: 200 });
+  }
+
   /** Bring a feature into view, whether or not this map is the one that holds it. */
   fitFeature(feature: MapFeature): void {
     const coordinates = allCoordinates(feature);

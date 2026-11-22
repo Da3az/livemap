@@ -18,6 +18,17 @@ const VERTEX_DEADZONE_MOUSE = 6;
 const VERTEX_DEADZONE_TOUCH = 12;
 /** A second double-click this soon after one is the same gesture reported again. */
 const DOUBLE_CLICK_REPEAT_MS = 400;
+/** Arrow-key nudges this close together are one move, and one undo step. */
+const NUDGE_SETTLE_MS = 600;
+
+/** The screen direction of an arrow key: geographic, so never mirrored for right-to-left. */
+export function arrowDirection(key: string): Pt | null {
+  if (key === "ArrowLeft") return { x: -1, y: 0 };
+  if (key === "ArrowRight") return { x: 1, y: 0 };
+  if (key === "ArrowUp") return { x: 0, y: -1 };
+  if (key === "ArrowDown") return { x: 0, y: 1 };
+  return null;
+}
 
 interface Handle {
   type: "vertex" | "midpoint";
@@ -46,6 +57,8 @@ export class SelectTool implements Tool {
   private gesture: Gesture | null = null;
   private snap: Snap | null = null;
   private lastDoubleClick = 0;
+  /** A burst of arrow-key nudges in progress: what it started from, and the timer that ends it. */
+  private nudging: { originals: MapFeature[]; moved: MapFeature[]; timer: number } | null = null;
 
   constructor(private readonly host: ToolHost) {}
 
@@ -185,6 +198,8 @@ export class SelectTool implements Tool {
   /* --------------------------------------------------------------- commands */
 
   key(event: KeyboardEvent): boolean {
+    const direction = arrowDirection(event.key);
+    if (direction) return this.nudge(direction, event.shiftKey ? 10 : 1);
     if (event.key === "Escape") {
       if (this.gesture) this.cancel();
       else if (this.reshapingId !== null) this.host.reshape(null);
@@ -215,6 +230,7 @@ export class SelectTool implements Tool {
   }
 
   cancel(): void {
+    this.settleNudge();
     const gesture = this.gesture;
     this.gesture = null;
     this.snap = null;
@@ -308,6 +324,38 @@ export class SelectTool implements Tool {
       }
     }
     return best;
+  }
+
+  /**
+   * Arrow keys move the selection by screen pixels. Nothing selected (or only
+   * locked features) leaves the key to pan the map. A burst of presses is
+   * shown as it goes and recorded as one step once the keys go quiet.
+   */
+  private nudge(direction: Pt, pixels: number): boolean {
+    const ids = [...this.host.selection()].filter((id) => this.host.isSelectable(id));
+    if (ids.length === 0 || this.gesture) return false;
+    if (!this.nudging) {
+      const originals = ids.flatMap((id) => this.host.feature(id) ?? []);
+      this.nudging = { originals, moved: originals, timer: 0 };
+    }
+    const nudging = this.nudging;
+    const view = this.host.renderer.view();
+    const centre = { x: view.width / 2, y: view.height / 2 };
+    const from = view.unproject(centre);
+    const to = view.unproject({ x: centre.x + direction.x * pixels, y: centre.y + direction.y * pixels });
+    nudging.moved = nudging.moved.map((feature) => translateFeature(feature, { x: to.x - from.x, y: to.y - from.y }));
+    this.host.update(nudging.moved);
+    window.clearTimeout(nudging.timer);
+    nudging.timer = window.setTimeout(() => this.settleNudge(), NUDGE_SETTLE_MS);
+    return true;
+  }
+
+  private settleNudge(): void {
+    const nudging = this.nudging;
+    if (!nudging) return;
+    this.nudging = null;
+    window.clearTimeout(nudging.timer);
+    this.host.commit(nudging.moved);
   }
 
   private removeVertex(ref: VertexRef): void {

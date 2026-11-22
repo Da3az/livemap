@@ -22,7 +22,11 @@ export interface MapViewerProps {
   /** Overrides `settings.embed.legend`. */
   legend?: boolean;
   zoomButtons?: boolean;
+  /** Overrides `settings.embed.panButtons`. */
+  panButtons?: boolean;
   scaleBar?: boolean;
+  /** Offer a full-screen button: the embed page only. */
+  fullscreen?: boolean;
   /** "map" leaves out the title, the timeline and the credit line, for showing two versions side by side. */
   furniture?: "full" | "map";
   /** Where the timeline starts; the end of the map's span when left out. */
@@ -149,6 +153,8 @@ function Viewer({ version, theme, className, furniture = "full", note, handleRef
         navigation={isStatic ? "none" : embed.cooperativeGestures && full ? "cooperative" : "free"}
         showKey={overrides.legend ?? embed.legend}
         showZoom={overrides.zoomButtons ?? embed.zoomButtons}
+        showPan={overrides.panButtons ?? embed.panButtons}
+        showFullscreen={overrides.fullscreen === true}
         showScale={overrides.scaleBar ?? embed.scaleBar}
         timeWindow={timed ? playback.window : null}
         highlightIds={highlightIds ?? NO_IDS}

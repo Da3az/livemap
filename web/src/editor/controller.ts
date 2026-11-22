@@ -171,6 +171,8 @@ export interface EditorController {
   /* ---- view ---- */
   getViewport(): Viewport;
   setViewport(viewport: Partial<Viewport>, options?: { animate?: boolean }): void;
+  /** Move the view by a share of the map's size: x east, y south. The no-drag way to pan. */
+  panBy(x: number, y: number): void;
   fitFeatures(ids?: string[]): void;
   fitBounds(bounds: [LngLat, LngLat]): void;
   /**

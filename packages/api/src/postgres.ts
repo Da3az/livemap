@@ -1,6 +1,7 @@
 import pg from "pg";
 import {
   applySettingsPatch,
+  normaliseSettings,
   type LngLat,
   type MapDoc,
   type MapFeature,
@@ -183,7 +184,7 @@ function decodeMap(r: Record<string, any>): MapDoc {
     slug: r.slug,
     title: { value: r.title, dir: r.title_dir },
     uiDir: r.ui_dir,
-    settings: r.settings as MapSettings,
+    settings: normaliseSettings(r.settings as MapSettings),
     rev: Number(r.rev),
     publishedVersion: r.published_version === null ? null : Number(r.published_version),
     publishedRev: r.published_rev === null ? null : Number(r.published_rev),
@@ -477,7 +478,7 @@ export class PostgresRepo implements MapRepo {
       }
       const applied = guard.rows[0]!;
 
-      let settings = applied.settings as MapSettings;
+      let settings = normaliseSettings(applied.settings as MapSettings);
       if (edit.settings) {
         settings = applySettingsPatch(settings, edit.settings);
         await c.query(`update maps set settings = $2::jsonb where id = $1`, [mapId, JSON.stringify(settings)]);

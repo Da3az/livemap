@@ -17,10 +17,13 @@ export const CAPABILITIES: ControllerCapabilities = {
 /**
  * The editor's MapLibre map, on a plain ground until the basemap arrives.
  * Double-click finishes a shape and Shift-drag draws a selection box, so the
- * map gives both gestures up.
+ * map gives both gestures up. Turning and tilting are off in every gesture:
+ * a news map stays north-up, and bearing and pitch are set in Map settings.
+ * MapLibre's own keys are off too; the controller routes the arrow keys
+ * itself, so they can move a selection instead of the map.
  */
 export function createEditorMap(options: ControllerOptions, theme: ThemeMode): MapLibreMap {
-  return createMap({
+  const map = createMap({
     container: options.container,
     style: blankStyle(readPalette(options.container, theme)),
     center: options.viewport.center,
@@ -31,7 +34,13 @@ export function createEditorMap(options: ControllerOptions, theme: ThemeMode): M
     attributionControl: false,
     doubleClickZoom: false,
     boxZoom: false,
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
+    keyboard: false,
   });
+  map.touchZoomRotate.disableRotation();
+  return map;
 }
 
 /**

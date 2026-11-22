@@ -26,6 +26,9 @@ export function EmbedSection({ disabled }: { disabled: boolean }) {
         <Check checked={embed.zoomButtons} disabled={disabled || embed.static} onChange={(zoomButtons) => store.setEmbed({ zoomButtons })}>
           {t.zoomButtons}
         </Check>
+        <Check checked={embed.panButtons} disabled={disabled || embed.static} onChange={(panButtons) => store.setEmbed({ panButtons })}>
+          {t.panButtons}
+        </Check>
         <Check
           checked={embed.cooperativeGestures}
           disabled={disabled || embed.static}

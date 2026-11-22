@@ -37,6 +37,21 @@ const SCALE_CORNER: Record<Corner, string> = {
 };
 
 const SR_LIST_LIMIT = 80;
+/** A pan button moves the view by this share of the map's width or height. */
+const PAN_SHARE = 1 / 3;
+const CONTROL = "grid size-dock place-items-center -outline-offset-2 hover:bg-well active:bg-rule";
+const PAD = "grid size-7 place-items-center -outline-offset-2 hover:bg-well active:bg-rule";
+
+/** Whether this document is shown full screen, following changes made by the browser too (Esc). */
+function useFullscreen(): boolean {
+  const [on, setOn] = useState(() => typeof document !== "undefined" && document.fullscreenElement !== null);
+  useEffect(() => {
+    const update = (): void => setOn(document.fullscreenElement !== null);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+  return on;
+}
 /** An opening view is a centre and a zoom chosen on a desk monitor; below this width the zoom steps back so a phone sees the same ground. */
 const OPENING_VIEW_WIDTH = 640;
 const MAX_ZOOM_BACK = 1.5;
@@ -57,6 +72,10 @@ export interface MapStageProps {
   navigation: Navigation;
   showKey: boolean;
   showZoom: boolean;
+  /** Buttons that move the map without dragging, and one back to the starting view. */
+  showPan: boolean;
+  /** A full-screen button, where the browser allows it (the embed page; not the editor's preview). */
+  showFullscreen?: boolean;
   showScale: boolean;
   timeWindow: TimeWindow | null;
   highlightIds: readonly string[];
@@ -67,7 +86,21 @@ export interface MapStageProps {
 }
 
 /** The map itself and what sits on it: the key, the zoom buttons, the scale bar and the card for a tapped feature. */
-export function MapStage({ version, scope, navigation, showKey, showZoom, showScale, timeWindow, highlightIds, initialViewport, handleRef, onViewport }: MapStageProps) {
+export function MapStage({
+  version,
+  scope,
+  navigation,
+  showKey,
+  showZoom,
+  showPan,
+  showFullscreen = false,
+  showScale,
+  timeWindow,
+  highlightIds,
+  initialViewport,
+  handleRef,
+  onViewport,
+}: MapStageProps) {
   const t = useEmbedStrings();
   const lang = useLang();
   const dir = version.uiDir;
@@ -193,6 +226,19 @@ export function MapStage({ version, scope, navigation, showKey, showZoom, showSc
   );
   const moves = navigation !== "none";
 
+  const resetView = (): void => {
+    const element = container.current;
+    const opening = initialViewport ?? settings.openingView;
+    map?.setViewport(openingViewFor(opening, element?.clientWidth ?? 0), { animate: true });
+  };
+
+  const fullscreen = useFullscreen();
+  const fullscreenAvailable = typeof document !== "undefined" && document.fullscreenEnabled;
+  const toggleFullscreen = (): void => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    else void document.documentElement.requestFullscreen().catch(() => undefined);
+  };
+
   return (
     <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden bg-well">
       {/* MapLibre makes its container `position: relative`, so the positioning lives on a wrapper. */}
@@ -210,15 +256,54 @@ export function MapStage({ version, scope, navigation, showKey, showZoom, showSc
 
       {hasKey ? <MapKey version={version} scope={scope} folds={keyFolds} /> : null}
 
-      {moves && showZoom ? (
-        <div role="group" data-label-obstacle aria-label={t.zoomGroup} className={`absolute flex flex-col overflow-hidden rounded-key border border-rule-strong bg-panel text-ink ${ZOOM_CORNER[corner]}`}>
-          <button type="button" aria-label={t.zoomIn} onClick={() => map?.zoomBy(1)} className="grid size-dock place-items-center -outline-offset-2 hover:bg-well active:bg-rule">
-            <Icon name="plus" />
-          </button>
-          <span aria-hidden="true" className="h-px bg-rule-strong" />
-          <button type="button" aria-label={t.zoomOut} onClick={() => map?.zoomBy(-1)} className="grid size-dock place-items-center -outline-offset-2 hover:bg-well active:bg-rule">
-            <Icon name="minus" />
-          </button>
+      {moves && (showZoom || showPan || showFullscreen) ? (
+        <div data-label-obstacle className={`absolute flex flex-col items-end gap-1.5 ${ZOOM_CORNER[corner]}`}>
+          {showZoom ? (
+            <div role="group" aria-label={t.zoomGroup} className="flex flex-col overflow-hidden rounded-key border border-rule-strong bg-panel text-ink">
+              <button type="button" aria-label={t.zoomIn} onClick={() => map?.zoomBy(1)} className={CONTROL}>
+                <Icon name="plus" />
+              </button>
+              <span aria-hidden="true" className="h-px bg-rule-strong" />
+              <button type="button" aria-label={t.zoomOut} onClick={() => map?.zoomBy(-1)} className={CONTROL}>
+                <Icon name="minus" />
+              </button>
+            </div>
+          ) : null}
+          {showPan ? (
+            /* Compass directions, so never mirrored: west stays on the left in a right-to-left page. */
+            <div role="group" aria-label={t.panGroup} dir="ltr" className="grid grid-cols-3 overflow-hidden rounded-key border border-rule-strong bg-panel text-ink">
+              <span aria-hidden="true" />
+              <button type="button" aria-label={t.panNorth} onClick={() => map?.panBy(0, -PAN_SHARE)} className={PAD}>
+                <Icon name="panUp" size={14} />
+              </button>
+              <span aria-hidden="true" />
+              <button type="button" aria-label={t.panWest} onClick={() => map?.panBy(-PAN_SHARE, 0)} className={PAD}>
+                <Icon name="panLeft" size={14} />
+              </button>
+              <button type="button" aria-label={t.resetView} title={t.resetView} onClick={resetView} className={PAD}>
+                <Icon name="recentre" size={14} />
+              </button>
+              <button type="button" aria-label={t.panEast} onClick={() => map?.panBy(PAN_SHARE, 0)} className={PAD}>
+                <Icon name="panRight" size={14} />
+              </button>
+              <span aria-hidden="true" />
+              <button type="button" aria-label={t.panSouth} onClick={() => map?.panBy(0, PAN_SHARE)} className={PAD}>
+                <Icon name="panDown" size={14} />
+              </button>
+              <span aria-hidden="true" />
+            </div>
+          ) : null}
+          {showFullscreen && fullscreenAvailable ? (
+            <button
+              type="button"
+              aria-label={fullscreen ? t.exitFullscreen : t.fullscreen}
+              title={fullscreen ? t.exitFullscreen : t.fullscreen}
+              onClick={toggleFullscreen}
+              className={`${CONTROL} overflow-hidden rounded-key border border-rule-strong bg-panel text-ink`}
+            >
+              <Icon name={fullscreen ? "exitFullscreen" : "fullscreen"} />
+            </button>
+          ) : null}
         </div>
       ) : null}
 

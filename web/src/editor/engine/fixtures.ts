@@ -69,7 +69,7 @@ export function fixtureSettings(dir: "ltr" | "rtl"): MapSettings {
       asOf: "2021-10-03T18:30:00Z",
     },
     timeline: { enabled: true, mode: "moving", speed: 3600, windowMs: 86_400_000 },
-    embed: { legend: true, zoomButtons: true, scaleBar: true, cooperativeGestures: true, static: false, theme: "auto" },
+    embed: { legend: true, zoomButtons: true, panButtons: true, scaleBar: true, cooperativeGestures: true, static: false, theme: "auto" },
   };
 }
 

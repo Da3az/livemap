@@ -70,7 +70,7 @@ function makeSettings(input: SettingsInput): MapSettings {
     },
     titleBlock: { show: true, subtitle: null, source: null, credit: null, note: null, asOf: null, ...input.titleBlock },
     timeline: { enabled: false, mode: "cumulative", speed: 3600, windowMs: 86_400_000, ...input.timeline },
-    embed: { legend: true, zoomButtons: true, scaleBar: true, cooperativeGestures: true, static: false, theme: "auto" },
+    embed: { legend: true, zoomButtons: true, panButtons: true, scaleBar: true, cooperativeGestures: true, static: false, theme: "auto" },
   };
 }
 

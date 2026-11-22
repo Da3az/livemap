@@ -1,4 +1,4 @@
-import type { MapFeature, MapVersion as Artifact, PublishedFeature } from "@livemap/core";
+import { normaliseSettings, type MapFeature, type MapVersion as Artifact, type PublishedFeature } from "@livemap/core";
 import type { MapVersion } from "./types";
 
 /**
@@ -8,5 +8,5 @@ import type { MapVersion } from "./types";
  */
 export function fromArtifact(artifact: Artifact): MapVersion {
   const fill = (feature: PublishedFeature): MapFeature => ({ ...feature, updatedAt: artifact.publishedAt, updatedBy: "" }) as MapFeature;
-  return { ...artifact, features: artifact.features.map(fill) };
+  return { ...artifact, settings: normaliseSettings(artifact.settings), features: artifact.features.map(fill) };
 }

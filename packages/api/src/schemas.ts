@@ -288,10 +288,11 @@ const TIMELINE = {
 const EMBED = {
   type: "object",
   additionalProperties: false,
-  required: ["legend", "zoomButtons", "scaleBar", "cooperativeGestures", "static", "theme"],
+  required: ["legend", "zoomButtons", "panButtons", "scaleBar", "cooperativeGestures", "static", "theme"],
   properties: {
     legend: { type: "boolean" },
     zoomButtons: { type: "boolean" },
+    panButtons: { type: "boolean" },
     scaleBar: { type: "boolean" },
     cooperativeGestures: { type: "boolean" },
     static: { type: "boolean" },

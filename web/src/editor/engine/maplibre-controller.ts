@@ -252,6 +252,11 @@ class MapLibreController implements EditorController {
     moveTo(this.map, viewport, options?.animate === true);
   }
 
+  panBy(x: number, y: number): void {
+    const container = this.map.getContainer();
+    this.map.panBy([x * container.clientWidth, y * container.clientHeight], { duration: 200 });
+  }
+
   fitFeatures(ids?: string[]): void {
     const wanted = ids ? new Set(ids) : null;
     const coordinates = this.renderer

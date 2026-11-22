@@ -92,6 +92,7 @@ export function createMockController(options: ControllerOptions): MockController
     setSnapping: (enabled) => record("setSnapping", enabled),
     setTimeFilter: (window) => record("setTimeFilter", window),
     getViewport: () => viewport,
+    panBy: (x, y) => record("panBy", x, y),
     setViewport(next, viewOptions) {
       record("setViewport", next, viewOptions);
       viewport = { ...viewport, ...next };

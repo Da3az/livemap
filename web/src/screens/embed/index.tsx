@@ -105,6 +105,8 @@ export default function Embed() {
           theme={theme}
           static={readFlag(params.get("static"))}
           legend={readFlag(params.get("legend"))}
+          panButtons={readFlag(params.get("pan"))}
+          fullscreen
           note={note ? <span role="status">{note}</span> : null}
           className="h-full"
         />

@@ -177,6 +177,7 @@ export function makeSettings(input: SettingsInput): MapSettings {
     embed: {
       legend: true,
       zoomButtons: true,
+      panButtons: true,
       scaleBar: true,
       cooperativeGestures: true,
       static: false,

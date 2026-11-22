@@ -49,6 +49,7 @@ function Specimen({ tenantSlug, mapSlug }: { tenantSlug: string; mapSlug: string
         furniture="map"
         theme={mode}
         zoomButtons={false}
+        panButtons={false}
         className="mt-3 h-80 rounded-key border border-rule md:h-96 xl:h-128"
       />
       <p className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-2xs text-ink-3">

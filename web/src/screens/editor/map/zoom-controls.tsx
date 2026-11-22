@@ -7,6 +7,41 @@ import { isMac } from "../shared/format";
 import { useEditorLayout } from "../shared/layout";
 import { Tip } from "../shared/tip";
 import { LiveScaleBar } from "./furniture";
+import { Icon, type IconName } from "@/components/icons";
+
+/** A pan button moves the view by this share of the map's width or height. */
+const PAN_SHARE = 1 / 3;
+
+/**
+ * Up, down, left and right, and the opening view in the middle: the map can be
+ * moved without dragging (WCAG 2.2, 2.5.7). Compass directions, so the pad is
+ * never mirrored: west stays on the left in the right-to-left editor.
+ */
+function PanPad() {
+  const t = useEditorStrings();
+  const { controller } = useEditorRuntime();
+  const { touch } = useEditorLayout();
+  const opening = useEditorStore((state) => state.doc.settings.openingView);
+  const cell = cn("rounded-none border-0", touch ? "size-11" : "size-7");
+  const button = (label: string, icon: IconName, onPress: () => void) => (
+    <Button variant="ghost" className={cell} aria-label={label} isDisabled={controller === null} onPress={onPress}>
+      <Icon name={icon} size={14} />
+    </Button>
+  );
+  return (
+    <div role="group" aria-label={t.map.panGroup} dir="ltr" className="pointer-events-auto grid grid-cols-3 overflow-hidden rounded-key border border-rule-strong bg-panel">
+      <span aria-hidden="true" />
+      {button(t.map.panNorth, "panUp", () => controller?.panBy(0, -PAN_SHARE))}
+      <span aria-hidden="true" />
+      {button(t.map.panWest, "panLeft", () => controller?.panBy(-PAN_SHARE, 0))}
+      {button(t.map.openingView, "recentre", () => controller?.setViewport(opening, { animate: true }))}
+      {button(t.map.panEast, "panRight", () => controller?.panBy(PAN_SHARE, 0))}
+      <span aria-hidden="true" />
+      {button(t.map.panSouth, "panDown", () => controller?.panBy(0, PAN_SHARE))}
+      <span aria-hidden="true" />
+    </div>
+  );
+}
 
 /** Zoom in, zoom out and fit everything, with the scale bar beneath. Map furniture: small and hard-edged. */
 export function ZoomControls({ bottom }: { bottom: number }) {
@@ -28,6 +63,7 @@ export function ZoomControls({ bottom }: { bottom: number }) {
           −
         </Button>
       </div>
+      <PanPad />
       <Tip label={t.map.fitTip} keys={formatShortcut(shortcutFor("view.zoomToFit")?.keys ?? "", isMac())}>
         <Button
           variant="outline"
