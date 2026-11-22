@@ -1,17 +1,18 @@
 # livemap
 
-A multi-tenant backend and rendering engine for **interactive live-event maps** —
-the kind a newsroom publishes during an unfolding story. Colour regions, drop
-event icons, draw movement arrows and front lines, annotate with leader lines,
-publish an immutable version, embed it.
+A multi-tenant product for authoring **interactive live-event maps** — the kind
+a newsroom publishes during an unfolding story. Colour regions, drop event
+icons, draw movement arrows and front lines, annotate with leader lines, play
+them on a timeline, publish an immutable version, embed it in an article.
 
 Built Arabic-first: every text-bearing type carries an explicit direction, and
 the RTL handling is engineering rather than a stylesheet afterthought.
 
 ```bash
-npm install
+npm install                        # Node 24
+npm run demo                       # the product on http://127.0.0.1:8800/, no database
 npm run db:up && npm run migrate   # postgis on 127.0.0.1:5460
-npm test                           # 249 tests
+npm run serve                      # the real server, serving the built front end
 npm run loadtest                   # reproduces the numbers below (~8 min)
 ```
 
@@ -94,16 +95,14 @@ Mapforge, the closest open-source lookalikes.
 
 | | Where |
 |---|---|
-| **Curved arrows** — Catmull-Rom through stored control points, arrowhead tangent to the *smoothed* curve, shaft trimmed so the line does not show through the head, optional mid-shaft chevrons | [`core/src/arrow.ts`](packages/core/src/arrow.ts) |
-| **Front-line symbology** — toothed, ticked and semicircle lines with a facing side, generated as real geometry because no permissively-licensed icon set contains the symbol | [`core/src/frontline.ts`](packages/core/src/frontline.ts) |
-| **Label de-confliction** — iterative relaxation with a deviation budget and priority-based suppression; hides what it cannot place rather than overlapping text | [`core/src/collision.ts`](packages/core/src/collision.ts) |
-| **Leader lines that survive zoom** — label offsets stored in *screen pixels*, not degrees | [`core/src/leader.ts`](packages/core/src/leader.ts) |
-| **Content-hashed versions** — the hash excludes `publishedAt`/`publishedBy`, so republishing an unchanged map returns the same ETag and keeps reader caches warm | [`core/src/version.ts`](packages/core/src/version.ts) |
-| **Publish ordering under partial failure** — pointer written last, always; a version row with no object is invisible and reconcilable, a pointer naming a missing object is a broken map | [`api/src/publish.ts`](packages/api/src/publish.ts) |
-| **Row-level security that the app cannot switch off** — app role is not the table owner, `FORCE ROW LEVEL SECURITY` on every tenant table, `set_config(..., local => true)` so a pooled connection cannot leak scope | [`migrations/0001_init.sql`](migrations/0001_init.sql), [`api/src/postgres.ts`](packages/api/src/postgres.ts) |
-| **Optimistic concurrency** — the revision guard and the bump are one statement, so a stale writer loses instead of clobbering an edit it never saw | [`api/src/postgres.ts`](packages/api/src/postgres.ts) |
-| **Arabic/RTL** — native MapLibre shaping, `coalesce(name:ar, name:nonlatin, name)` label resolution, and a halo-width floor that dodges a MapLibre bug which cuts Arabic glyph joins | [`core/src/types.ts`](packages/core/src/types.ts) |
-| **Headless visual verification** — renders a realistic scene across five views and asserts both structure and pixels | [`spikes/`](spikes/) |
+| **One ordered WebGL pass** — every feature, its text included, drawn in the author's order across kinds, inside MapLibre; panning is a uniform update; text shaped by the browser in the interface typefaces | [`web/src/render/`](web/src/render/) |
+| **Everything view-dependent recomputed per view** — arrowheads, tapers, front-line teeth and dashes sized in screen pixels, so they hold at every zoom | [`web/src/render/shapes.ts`](web/src/render/shapes.ts) |
+| **Label de-confliction** — labels move out of each other's way and from under the map's furniture, or are left out rather than overlapping | [`web/src/render/labels.ts`](web/src/render/labels.ts) |
+| **Content-hashed versions** — the hash is over the artifact readers receive, so republishing what they already have answers `unchanged` and keeps their caches warm | [`core/src/version.ts`](packages/core/src/version.ts) |
+| **Publish ordering under partial failure** — artifact first, pointer last and under the per-map lock, so neither a crash nor a slower concurrent publish can point readers backwards | [`api/src/publish.ts`](packages/api/src/publish.ts) |
+| **Row-level security that the app cannot switch off** — app role is not the table owner, `FORCE ROW LEVEL SECURITY` on every tenant table, `set_config(..., local => true)` so a pooled connection cannot leak scope | [`migrations/`](migrations/), [`api/src/postgres.ts`](packages/api/src/postgres.ts) |
+| **Optimistic concurrency** — the revision guard and the bump are one statement; settings save as a patch, so "keep mine" overwrites only what you changed | [`api/src/postgres.ts`](packages/api/src/postgres.ts), [`core/src/settings.ts`](packages/core/src/settings.ts) |
+| **A sandboxed embed that updates in place** — polls a tiny pointer with ETags, pauses in hidden tabs, backs off when the host fails; validates every resize message it is sent | [`web/src/screens/embed/`](web/src/screens/embed/), [`web/src/embed/`](web/src/embed/) |
 
 ### RTL is a correctness problem, not a stylesheet
 
@@ -112,46 +111,42 @@ is Arabic on about 99% of its roads, so keying labels on `name:ar` alone
 produces a mostly-unlabelled map. Resolution goes
 `name:<lang>` → `name:nonlatin` → `name`.
 
-MapLibre draws a text halo per-glyph when `text-halo-width <= 1`, which cuts the
-joins of connected scripts — Arabic, Persian, Urdu
-([maplibre-gl-js#8949](https://github.com/maplibre/maplibre-gl-js/issues/8949)).
-`normaliseHaloWidth()` floors it at 1.01 and there is a test pinning it.
+Feature text is shaped by the browser, not by MapLibre's glyph atlas, so Arabic
+joins and bidirectional text are the browser's own. (MapLibre draws a text halo
+per-glyph when `text-halo-width <= 1`, which cuts the joins of connected scripts
+— [maplibre-gl-js#8949](https://github.com/maplibre/maplibre-gl-js/issues/8949);
+the editor's interface is mirrored for right-to-left maps from logical CSS
+properties alone.)
 
 ---
 
 ## Layout
 
 ```
-packages/core       domain model + annotation geometry. ZERO dependencies. 129 tests.
-packages/renderer   MapLibre overlay, shared unchanged by editor and viewer. 26 tests.
-packages/api        routes, publish pipeline, PostgresRepo, auth, WS hub. 74 tests.
-packages/viewer     embeddable read-only viewer + ETag polling. 20 tests.
-packages/editor     the map editor: tools, inspector, undo, save, publish.
-packages/app        the application shell: sign-in, workspace, versions, embed.
+web/                the front end: sign-in, workspace, editor, versions, the embed.
+                    React, Vite, MapLibre 6.19.
+packages/core       the one domain model, API shapes, settings patch, publish builder
+                    and hash, order keys, templates, gazetteer. Zero dependencies.
+packages/api        routes, schemas, publish pipeline, PostgresRepo, authz, auth,
+                    guests, limits, place search, R2 store.
 
-migrations/         0001_init.sql, 0002_role_aware_rls.sql — schema, RLS, roles.
-scripts/            migrate.mjs, serve.mjs (production entrypoint),
+migrations/         0001–0004 — schema, RLS, roles, document model, version origin.
+scripts/            migrate.mjs, serve.mjs (production entrypoint), dev-workspace.mjs,
                     reap-guests.mjs, mint-token.mjs.
 bench/              load-test harness: seeder + a server exposing 3 read paths.
 loadtest/           k6 scripts, sweep runner, published results.
-spikes/             headless visual verification + screenshots.
-demo/               the whole application on one port, no database.
+demo/               the whole product on one port, no database.
 ```
 
-`core` has zero dependencies and runs in plain Node, which is why the geometry
-is unit-testable without a browser or a GPU. `renderer` is consumed unchanged by
-both the editor and the viewer. Persistence sits behind a `MapRepo` port, so the
-entire pipeline is exercised against an in-memory implementation in tests and
-against Postgres in integration tests — same interface.
+The front end and the server compile against one model in `core`, and build the
+published artifact with the same function, so the editor's preview cannot
+disagree with a publish. Persistence sits behind a `MapRepo` port, implemented in
+memory for the demo and by Postgres for real.
 
 ```
-editor ──┐
-         ├──► renderer ──► MapLibre
-viewer ──┘
-
-app ──► editor ──► api ──► MapRepo ──► Postgres          (write path)
-                            │
-                            └──► ArtifactStore ──► CDN ──► viewer   (read path)
+web (editor) ──► api ──► MapRepo ──► Postgres                       (write path)
+                  │
+                  └──► ArtifactStore ──► CDN ──► web (embed)           (read path)
 ```
 
 ---
@@ -161,15 +156,15 @@ app ──► editor ──► api ──► MapRepo ──► Postgres         
 ```bash
 cp .env.example .env
 
-npm run build
-npm test                 # 249 tests; DB integration tests skip without DATABASE_URL
-npm run spike            # headless render + 18 assertions → spikes/shots/
-npm run demo             # http://127.0.0.1:8800/ — the application, no database
+npm run build            # core, api, and web/dist
+npm run demo             # http://127.0.0.1:8800/ — the product, no database
+node demo/app-check.mjs  # drives the running demo headless and leaves screenshots
 
 npm run db:up            # postgis 18-3.7 on 127.0.0.1:5460
 npm run migrate
 npm run migrate:status
 npm run serve            # needs APP_DATABASE_URL + SESSION_SECRET
+npm run dev-workspace    # local only: a workspace with every role, and their tokens
 npm run mint-token -- <tenant-slug> <user-email>   # a token to sign in with
 npm run reap-guests -- --dry-run                   # expired guest workspaces
 ```
@@ -189,14 +184,21 @@ map renders nothing, with a 404 as the only clue.
 
 ## Status, honestly
 
-**Built and tested:** the annotation engine, the renderer, the publish pipeline,
-the HTTP surface, the embeddable viewer, Postgres persistence with row-level
-security, HMAC session auth, rate limiting and readiness probes, and the load
-tests above.
+**Built and run end to end:** the front end against the real API — sign-in
+(member tokens, and guest workspaces through Cloudflare Turnstile), the
+workspace, the editor with saving, conflicts and forced saves, publishing,
+versions and rollback, and the embed in a sandboxed iframe on another origin
+picking up a new version by polling. Postgres persistence with row-level
+security, HMAC session auth, rate limiting, readiness probes, per-tenant quotas,
+request validation with a generated API reference, and the load tests above.
 
-**Built:** the application around them — guest workspaces, map lifecycle,
-per-tenant quotas, request validation with a generated API reference, and an
-R2 artifact store. The R2 store has not yet been run against a real bucket.
+**Built, not yet run against the real thing:** the R2 artifact store (no bucket
+exists yet). Place search answers from a built-in list of about 270 places until
+a geocoder is chosen.
+
+**Tests:** the API's test suite was written against the previous contract and
+has not been brought forward; essential tests are to be written once the work
+settles.
 
 **Not built:**
 
@@ -205,9 +207,7 @@ R2 artifact store. The R2 store has not yet been run against a real bucket.
   storage. A half-written auth system is worse than an honest seam.
 - **A scheduler.** Expired guest workspaces are removed by
   `scripts/reap-guests.mjs`, which something outside the server has to run.
-- **Vertex editing.** You can draw, restyle, reorder and delete; reshaping an
-  existing shape means redrawing it.
-- Billing. Icon de-confliction at low zoom. Labels avoiding geometry.
+- Billing. A Content-Security-Policy beyond framing rules.
 - `publish_requests` and `feeds` exist in the schema but nothing reads them yet.
 
 `docs/architecture.md` §6 lists every known gap.
