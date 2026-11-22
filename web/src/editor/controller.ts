@@ -83,6 +83,10 @@ export interface ControllerEvents {
    */
   reshape: (id: string | null) => void;
   draw: (progress: DrawProgress | null) => void;
+  /** Keyboard placement started or stopped while drawing: show the crosshair's buttons while it is on. */
+  crosshair: (on: boolean) => void;
+  /** A stylus touched the map while pen mode was "auto": the pen now draws and fingers move the map. */
+  pen: () => void;
   pointer: (info: PointerInfo) => void;
   viewport: (viewport: Viewport) => void;
   /** Something failed that the user should hear about (tiles, an unusable shape). */
@@ -173,6 +177,29 @@ export interface EditorController {
   setViewport(viewport: Partial<Viewport>, options?: { animate?: boolean }): void;
   /** Move the view by a share of the map's size: x east, y south. The no-drag way to pan. */
   panBy(x: number, y: number): void;
+  /** Keep the drawing tool after a shape (true) or return to Select (false, the default). */
+  setToolLocked(locked: boolean): void;
+  /**
+   * "auto" (the default) switches pen mode on at the first stylus contact;
+   * "on" and "off" fix it. In pen mode the pen draws and selects, one finger
+   * pans, and palms that touch the screen while the pen is down are ignored.
+   */
+  setPenMode(mode: "auto" | "on" | "off"): void;
+  /** Turn keyboard placement on for the active drawing tool: a crosshair stands in for the pointer. */
+  setCrosshair(on: boolean): void;
+  /** Place a point, an icon or a note at the crosshair. */
+  placeAtCrosshair(): void;
+  /** Take back the last point of the shape being drawn. False when nothing is being drawn. */
+  undoPoint(): boolean;
+  /** Put back the point `undoPoint` took. False when there is none. */
+  redoPoint(): boolean;
+  /**
+   * The id of the shape finished last, while reopening it is still possible:
+   * nothing has happened on the map since. Null otherwise.
+   */
+  reopenable(): string | null;
+  /** Resume drawing the shape finished last, with its points; call once its feature is gone. */
+  reopen(): void;
   fitFeatures(ids?: string[]): void;
   fitBounds(bounds: [LngLat, LngLat]): void;
   /**

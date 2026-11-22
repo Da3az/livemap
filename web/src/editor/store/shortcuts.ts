@@ -12,6 +12,8 @@ export type CommandId =
   | "tool.frontline"
   | "tool.point"
   | "tool.annotation"
+  | "tool.lock"
+  | "tool.pen"
   | "edit.undo"
   | "edit.redo"
   | "edit.copy"
@@ -102,6 +104,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   },
   { id: "tool.point", keys: "I", label: bi("Icon", "رمز"), section: "tools", context: "editor", tool: "point" },
   { id: "tool.annotation", keys: "T", label: bi("Text", "نص"), section: "tools", context: "editor", tool: "annotation" },
+  {
+    id: "tool.lock",
+    keys: "Q",
+    label: bi("Keep the tool after each shape", "إبقاء الأداة بعد كل شكل"),
+    section: "tools",
+    context: "editor",
+  },
+  { id: "tool.pen", keys: "Shift+P", label: bi("Pen mode on or off", "تشغيل أو إيقاف وضع القلم"), section: "tools", context: "editor" },
 
   { id: "edit.undo", keys: "Mod+Z", label: bi("Undo", "تراجع"), section: "edit", context: "editor" },
   {
@@ -297,10 +307,22 @@ export function runCommand(id: CommandId, environment: CommandEnvironment): bool
     case "tool.annotation":
       store.setTool("annotation");
       return true;
-    case "edit.undo":
-      store.undo();
+    case "tool.lock":
+      store.setToolLocked(!state.view.toolLocked);
       return true;
+    case "tool.pen":
+      store.setPenMode(state.view.penMode === "off" ? "on" : "off");
+      return true;
+    case "edit.undo": {
+      /* While drawing, undo takes back a point; right after a shape is finished, it reopens it. */
+      if (controller?.undoPoint()) return true;
+      const reopen = controller?.reopenable() ?? null;
+      store.undo();
+      if (reopen !== null && !store.getState().doc.features.has(reopen)) controller?.reopen();
+      return true;
+    }
     case "edit.redo":
+      if (controller?.redoPoint()) return true;
       store.redo();
       return true;
     case "edit.copy":

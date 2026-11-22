@@ -5,6 +5,8 @@ import type { Emitter } from "./emitter";
 import type { Overrides } from "./overrides";
 import { findSnap } from "./snap";
 import type { ToolHost } from "./tool";
+import type { Finished } from "./draw-tool";
+import type { Pt } from "@/render/geo";
 
 const SNAP_TOLERANCE_MOUSE = 10;
 const SNAP_TOLERANCE_TOUCH = 18;
@@ -26,6 +28,9 @@ export interface HostBridge {
   dir(): "ltr" | "rtl";
   reshape(id: string | null): void;
   leaveTool(): void;
+  toolLocked(): boolean;
+  crosshairScreen(): Pt;
+  finished(finished: Finished): void;
   repaint(): void;
 }
 
@@ -88,6 +93,10 @@ export function createToolHost(bridge: HostBridge): ToolHost {
       bridge.leaveTool();
       events.emit("tool", "select");
     },
+    toolLocked: () => bridge.toolLocked(),
+    crosshair: (on) => events.emit("crosshair", on),
+    crosshairScreen: () => bridge.crosshairScreen(),
+    finished: (finished) => bridge.finished(finished),
     reject: (detail) => events.emit("problem", { code: "shape_rejected", detail }),
     progress: (progress) => events.emit("draw", progress),
     repaint: () => bridge.repaint(),

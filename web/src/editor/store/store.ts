@@ -43,6 +43,7 @@ import type {
   Refusal,
   SaveState,
   Selection,
+  PenMode,
   ViewState,
 } from "./state";
 import { copyStyleOf, detachPreset, pasteStyleOnto, presetLookup, presetStyleFrom, PRESET_KINDS } from "./style";
@@ -119,6 +120,26 @@ function pruneSelection(selection: Selection, doc: Doc): Selection {
       : null;
   if (ids.length === selection.ids.length && groupId === selection.groupId) return selection;
   return { ids, groupId };
+}
+
+const PEN_KEY = "livemap.pen-mode";
+
+/** Pen mode is remembered for the tab's session, so turning it off sticks across maps. */
+function readPenMode(): PenMode {
+  try {
+    const raw = window.sessionStorage.getItem(PEN_KEY);
+    return raw === "on" || raw === "off" ? raw : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function writePenMode(mode: PenMode): void {
+  try {
+    window.sessionStorage.setItem(PEN_KEY, mode);
+  } catch {
+    /* Lasts for this map. */
+  }
 }
 
 const COLLAPSED_KEY = (mapId: string): string => `livemap.collapsed-groups.${mapId}`;
@@ -289,6 +310,8 @@ export class EditorStore {
       timeline: { playhead: null, playing: false },
       view: {
         snapping: true,
+        toolLocked: false,
+        penMode: readPenMode(),
         listCollapsed: false,
         inspectorCollapsed: false,
         reshapingId: null,
@@ -300,7 +323,7 @@ export class EditorStore {
       save: { kind: "idle" },
       publish: { kind: "idle" },
       clipboard: { features: [], style: null },
-      live: { ready: false, draw: null, pointer: null, viewport: null, problem: null },
+      live: { ready: false, draw: null, crosshair: false, pointer: null, viewport: null, problem: null },
       refusal: null,
     };
   }
@@ -518,6 +541,16 @@ export class EditorStore {
     if (this.state.view.snapping !== enabled) this.setView({ snapping: enabled });
   }
 
+  setToolLocked(locked: boolean): void {
+    if (this.state.view.toolLocked !== locked) this.setView({ toolLocked: locked });
+  }
+
+  setPenMode(mode: PenMode): void {
+    if (this.state.view.penMode === mode) return;
+    writePenMode(mode);
+    this.setView({ penMode: mode });
+  }
+
   toggleList(): void {
     this.setView({ listCollapsed: !this.state.view.listCollapsed });
   }
@@ -587,6 +620,11 @@ export class EditorStore {
   /** Length and area of the shape being drawn. Called by the wiring. */
   setDrawProgress(draw: DrawProgress | null): void {
     if (this.state.live.draw !== draw) this.set({ live: { ...this.state.live, draw } });
+  }
+
+  /** Keyboard placement started or stopped. Called by the wiring. */
+  setCrosshair(crosshair: boolean): void {
+    if (this.state.live.crosshair !== crosshair) this.set({ live: { ...this.state.live, crosshair } });
   }
 
   /** Where the pointer is. Called by the wiring. */

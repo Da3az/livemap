@@ -42,6 +42,7 @@ export function ToolDock({ onHeight }: { onHeight?: (height: number) => void }) 
   const ui = useEditorUi();
   const tool = useEditorStore((state) => state.tool);
   const snapping = useEditorStore((state) => state.view.snapping);
+  const toolLocked = useEditorStore((state) => state.view.toolLocked);
   const readOnly = useEditorStore((state) => state.access.readOnly !== null);
   const mac = isMac();
   const fixed = useRef<HTMLDivElement>(null);
@@ -65,6 +66,13 @@ export function ToolDock({ onHeight }: { onHeight?: (height: number) => void }) 
     "flex shrink-0 cursor-default items-center gap-1.5 rounded-pill px-3 text-sm @max-3xl/map:gap-1 @max-3xl/map:px-2 font-medium whitespace-nowrap text-ink-2 transition-colors duration-100 hover:bg-well hover:text-ink data-disabled:opacity-50 data-selected:bg-survey data-selected:font-semibold data-selected:text-on-survey",
     touch ? "h-11 px-2.5" : "h-dock",
   );
+
+  /* Double-clicking a drawing tool picks it and keeps it, as Q does. */
+  const lockOnDoubleClick = (id: ToolId) => {
+    if (id === "select" || readOnly) return;
+    store.setTool(id);
+    store.setToolLocked(true);
+  };
 
   return (
     <div
@@ -96,6 +104,7 @@ export function ToolDock({ onHeight }: { onHeight?: (height: number) => void }) 
                 isSelected={active}
                 isDisabled={readOnly && id !== "select"}
                 onChange={() => store.setTool(id)}
+                onDoubleClick={() => lockOnDoubleClick(id)}
                 className={cn(item, "relative gap-1 px-2.5", !active && "min-w-11 justify-center")}
               >
                 <Icon name={id} />
@@ -114,6 +123,7 @@ export function ToolDock({ onHeight }: { onHeight?: (height: number) => void }) 
               isSelected={tool === id}
               isDisabled={readOnly && id !== "select"}
               onChange={() => store.setTool(id)}
+              onDoubleClick={() => lockOnDoubleClick(id)}
               className={item}
             >
               <Icon name={id} />
@@ -122,6 +132,18 @@ export function ToolDock({ onHeight }: { onHeight?: (height: number) => void }) 
             </ToggleButton>
           );
         })}
+        <Tip label={t.dock.keepTip} keys={formatShortcut(shortcutFor("tool.lock")?.keys ?? "", mac)}>
+          <ToggleButton
+            isSelected={toolLocked}
+            isDisabled={readOnly}
+            onChange={(on) => store.setToolLocked(on)}
+            aria-label={toolLocked ? t.dock.keepOn : t.dock.keepOff}
+            className={cn(item, "data-selected:bg-well data-selected:font-medium data-selected:text-ink")}
+          >
+            <Icon name={toolLocked ? "lock" : "unlock"} />
+            {compact ? null : t.dock.keep}
+          </ToggleButton>
+        </Tip>
         <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-rule-strong" />
         <Tip label={t.dock.snapTip} keys={formatShortcut(shortcutFor("view.toggleSnapping")?.keys ?? "", mac)}>
           <ToggleButton

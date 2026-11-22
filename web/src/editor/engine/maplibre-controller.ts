@@ -20,7 +20,8 @@ import { CAPABILITIES, createEditorMap, holdMap, releaseMap } from "./editor-map
 import { boundsOf, fitInside, maxCanvasSide, moveTo, NO_INSETS, readViewport } from "./camera";
 import { Chrome } from "./chrome";
 import { wireInput, wireMapEvents } from "./controller-input";
-import { DrawTool } from "./draw-tool";
+import type { PenMode } from "./input";
+import { DrawTool, type Finished } from "./draw-tool";
 import { allCoordinates } from "./edit";
 import { Emitter } from "./emitter";
 import { renderImage } from "./export";
@@ -63,6 +64,10 @@ class MapLibreController implements EditorController {
   private snapping = true;
   private drawDefaults: Partial<MapFeature> = {};
   private coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+  private toolLocked = false;
+  private penMode: PenMode = "auto";
+  /** The shape finished last, until anything else happens on the map. */
+  private lastFinished: Finished | null = null;
   private lastPointer: PointerSample | null = null;
 
   private readonly overrides: Overrides;
@@ -205,6 +210,46 @@ class MapLibreController implements EditorController {
 
   getTool(): ToolId {
     return this.toolId;
+  }
+
+  setToolLocked(locked: boolean): void {
+    this.toolLocked = locked;
+  }
+
+  setPenMode(mode: PenMode): void {
+    this.penMode = mode;
+  }
+
+  setCrosshair(on: boolean): void {
+    if (this.tool instanceof DrawTool) this.tool.setKeyboard(on);
+  }
+
+  placeAtCrosshair(): void {
+    if (this.tool instanceof DrawTool) this.tool.placeAtCrosshair();
+  }
+
+  undoPoint(): boolean {
+    return this.tool instanceof DrawTool ? this.tool.undoPoint() : false;
+  }
+
+  redoPoint(): boolean {
+    return this.tool instanceof DrawTool ? this.tool.redoPoint() : false;
+  }
+
+  reopenable(): string | null {
+    return this.lastFinished?.featureId ?? null;
+  }
+
+  reopen(): void {
+    const finished = this.lastFinished;
+    this.lastFinished = null;
+    if (!finished || !this.interactive || !this.selectTool) return;
+    this.tool?.dispose();
+    this.toolId = finished.kind;
+    this.tool = new DrawTool(this.host, finished.kind, finished.points);
+    this.events.emit("tool", finished.kind);
+    this.refreshCursor();
+    this.chrome?.requestPaint();
   }
 
   cancel(): void {
@@ -350,6 +395,11 @@ class MapLibreController implements EditorController {
       dir: () => this.dir,
       reshape: (id) => this.selectTool?.setReshaping(id),
       leaveTool: () => this.setTool("select"),
+      toolLocked: () => this.toolLocked,
+      crosshairScreen: () => this.crosshairScreen(),
+      finished: (finished) => {
+        this.lastFinished = finished;
+      },
       repaint: () => {
         this.chrome?.requestPaint();
         this.refreshCursor();
@@ -360,6 +410,17 @@ class MapLibreController implements EditorController {
   /** The palette set in use: the one stepped for the lightness of the basemap on screen. */
   private mapTheme(): ThemeMode {
     return basemapTheme(this.basemap.styleId, this.theme);
+  }
+
+  /** The centre of the part of the map that panes, the dock and the timeline leave visible. */
+  private crosshairScreen(): { x: number; y: number } {
+    const container = this.map.getContainer();
+    const left = this.dir === "rtl" ? this.insets.end : this.insets.start;
+    const right = this.dir === "rtl" ? this.insets.start : this.insets.end;
+    return {
+      x: left + Math.max(0, container.clientWidth - left - right) / 2,
+      y: this.insets.top + Math.max(0, container.clientHeight - this.insets.top - this.insets.bottom) / 2,
+    };
   }
 
   private attributionCorner(): "bottom-left" | "bottom-right" {
@@ -379,7 +440,11 @@ class MapLibreController implements EditorController {
           this.lastPointer = sample;
         },
         lastPointer: () => this.lastPointer,
+        interacted: () => {
+          this.lastFinished = null;
+        },
         refreshCursor: () => this.refreshCursor(),
+        pen: { mode: () => this.penMode, detected: () => this.events.emit("pen") },
       }),
     );
   }

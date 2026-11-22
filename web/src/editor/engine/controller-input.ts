@@ -3,7 +3,7 @@ import type { LngLat } from "@/model/types";
 import type { FeatureRenderer } from "@/render/feature-renderer";
 import type { MapLibreMap } from "@/render/maplibre";
 import type { Emitter } from "./emitter";
-import { attachPointerInput, type PointerSample } from "./input";
+import { attachPointerInput, type PenControl, type PointerSample } from "./input";
 import { arrowDirection } from "./select-tool";
 import type { Tool } from "./tool";
 
@@ -21,6 +21,9 @@ export interface InputWiring {
   seen: (sample: PointerSample | null, coarse: boolean | null) => void;
   lastPointer: () => PointerSample | null;
   refreshCursor: () => void;
+  /** Anything done on the map: an undo after it no longer reopens the last shape. */
+  interacted: () => void;
+  pen: PenControl;
 }
 
 /** Routes the map's pointer and key events to the active tool. Returns the disposer. */
@@ -45,6 +48,7 @@ export function wireInput(wiring: InputWiring): () => void {
   const detach = attachPointerInput(map, {
     down: (sample) => {
       seen(sample);
+      wiring.interacted();
       /* A press on the map puts keyboard focus there, so Delete and Escape reach the tool even when the press is taken. */
       if (document.activeElement !== map.getCanvas()) map.getCanvas().focus({ preventScroll: true });
       return tool()?.down(sample) ?? false;
@@ -79,10 +83,11 @@ export function wireInput(wiring: InputWiring): () => void {
       tool()?.leave();
       events.emit("pointer", { at: null, hitIds: [] });
     },
-  });
+  }, wiring.pen);
 
   const onKey = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    wiring.interacted();
     if (tool()?.key(event)) {
       event.preventDefault();
       event.stopPropagation();

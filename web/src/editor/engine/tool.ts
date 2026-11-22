@@ -6,6 +6,7 @@ import type { View } from "@/render/view";
 import type { ChromePen } from "./chrome";
 import type { PointerHandler, PointerSample } from "./input";
 import type { Snap } from "./snap";
+import type { Finished } from "./draw-tool";
 
 /** What a tool may ask of the controller. Tools hold gesture state only; the document is never theirs. */
 export interface ToolHost {
@@ -35,6 +36,14 @@ export interface ToolHost {
   reshape(id: string | null): void;
   /** Return to the select tool from inside the controller, and announce it. */
   leaveTool(): void;
+  /** Keep the drawing tool after a shape instead of returning to Select. */
+  toolLocked(): boolean;
+  /** Keyboard placement started or stopped: the interface shows its buttons while it is on. */
+  crosshair(on: boolean): void;
+  /** Where the crosshair sits: the centre of the map that panes and the dock leave visible, in CSS pixels. */
+  crosshairScreen(): Pt;
+  /** A shape was just finished, so an undo straight after can reopen it. */
+  finished(finished: Finished): void;
   reject(detail: string): void;
   progress(progress: DrawProgress | null): void;
   repaint(): void;

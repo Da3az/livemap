@@ -61,8 +61,14 @@ export interface TimelineState {
 }
 
 /** Interface state that is not part of the document and is not undone. */
+export type PenMode = "auto" | "on" | "off";
+
 export interface ViewState {
   readonly snapping: boolean;
+  /** Keep the drawing tool after a shape instead of returning to Select (Q). */
+  readonly toolLocked: boolean;
+  /** "auto" until a stylus is seen; turned off, it stays off for the session. */
+  readonly penMode: PenMode;
   readonly listCollapsed: boolean;
   readonly inspectorCollapsed: boolean;
   /** The feature whose vertices are being edited, if any. */
@@ -137,6 +143,8 @@ export type PublishState =
 export interface LiveState {
   readonly ready: boolean;
   readonly draw: DrawProgress | null;
+  /** Keyboard placement is on: the crosshair's buttons show. */
+  readonly crosshair: boolean;
   readonly pointer: PointerInfo | null;
   readonly viewport: Viewport | null;
   readonly problem: { code: "tiles_failed" | "shape_rejected" | "context_lost"; detail: string } | null;

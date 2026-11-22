@@ -93,6 +93,14 @@ export function createMockController(options: ControllerOptions): MockController
     setTimeFilter: (window) => record("setTimeFilter", window),
     getViewport: () => viewport,
     panBy: (x, y) => record("panBy", x, y),
+    setToolLocked: (locked) => record("setToolLocked", locked),
+    setPenMode: (mode) => record("setPenMode", mode),
+    setCrosshair: (on) => record("setCrosshair", on),
+    placeAtCrosshair: () => record("placeAtCrosshair"),
+    undoPoint: () => false,
+    redoPoint: () => false,
+    reopenable: () => null,
+    reopen: () => record("reopen"),
     setViewport(next, viewOptions) {
       record("setViewport", next, viewOptions);
       viewport = { ...viewport, ...next };

@@ -177,6 +177,52 @@ export class ChromePen {
     context.stroke();
   }
 
+  /** Where a keyboard places the next point: a cross with a clear centre, readable over any map. */
+  crosshair(at: Pt): void {
+    const { context } = this;
+    const arms: [number, number, number, number][] = [
+      [at.x, at.y - 18, at.x, at.y - 5],
+      [at.x, at.y + 5, at.x, at.y + 18],
+      [at.x - 18, at.y, at.x - 5, at.y],
+      [at.x + 5, at.y, at.x + 18, at.y],
+    ];
+    for (const [width, colour] of [
+      [5, this.paper],
+      [2, this.accent],
+    ] as const) {
+      context.beginPath();
+      for (const [x1, y1, x2, y2] of arms) {
+        context.moveTo(x1, y1);
+        context.lineTo(x2, y2);
+      }
+      context.lineWidth = width;
+      context.lineCap = "round";
+      context.strokeStyle = colour;
+      context.stroke();
+    }
+    context.beginPath();
+    context.arc(at.x, at.y, 2, 0, Math.PI * 2);
+    context.fillStyle = this.accent;
+    context.fill();
+  }
+
+  /** The handle that bends an arrow: a diamond, so it reads apart from the round vertex handles. */
+  bend(at: Pt, coarse: boolean, active: boolean): void {
+    const { context } = this;
+    const size = coarse ? 10 : 6.5;
+    context.beginPath();
+    context.moveTo(at.x, at.y - size);
+    context.lineTo(at.x + size, at.y);
+    context.lineTo(at.x, at.y + size);
+    context.lineTo(at.x - size, at.y);
+    context.closePath();
+    context.fillStyle = active ? this.accent : this.paper;
+    context.fill();
+    context.lineWidth = 1.75;
+    context.strokeStyle = this.accent;
+    context.stroke();
+  }
+
   marquee(box: Box): void {
     const { context } = this;
     context.beginPath();

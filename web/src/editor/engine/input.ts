@@ -43,9 +43,40 @@ interface Press {
   panWasEnabled: boolean;
 }
 
-export function attachPointerInput(map: MapLibreMap, handler: PointerHandler): () => void {
+export type PenMode = "auto" | "on" | "off";
+
+export interface PenControl {
+  /** "auto" turns pen mode on at the first stylus contact; "off" keeps it off whatever touches the screen. */
+  mode(): PenMode;
+  /** A stylus touched the screen while the mode was "auto". */
+  detected(): void;
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select, [contenteditable]") !== null);
+}
+
+export function attachPointerInput(map: MapLibreMap, handler: PointerHandler, pen: PenControl): () => void {
   const surface = map.getCanvasContainer();
   let press: Press | null = null;
+  /*
+   * Held Space, or the middle button, makes any drag pan the map, even in a
+   * tool where a drag draws. Space is released if the window loses focus while
+   * it is down, or it would stick (QGIS issue #61528).
+   */
+  let spaceDown = false;
+  let middlePan: { pointerId: number; x: number; y: number } | null = null;
+  /* Set by the first stylus contact in "auto" mode: from then on the pen draws and fingers move the map. */
+  let penSeen = false;
+  const penActive = () => pen.mode() === "on" || (pen.mode() === "auto" && penSeen);
+  /* A stylus on the screen: palms that touch it meanwhile are ignored. */
+  let penDown = false;
+  /*
+   * MapLibre pans from touch events, which a pointer listener cannot stop, so
+   * a palm resting beside the pen would drag the map. While a pen is down the
+   * map's own drag pan is off; it comes back when the pen lifts.
+   */
+  let penHeldPan = false;
   let lastClick: { time: number; at: Pt } | null = null;
   /* Every finger on the surface. Once two are down the gesture is the map's until all are lifted again. */
   const fingers = new Set<number>();
@@ -85,6 +116,28 @@ export function attachPointerInput(map: MapLibreMap, handler: PointerHandler): (
   };
 
   function onDown(event: PointerEvent) {
+    if (event.pointerType === "pen") {
+      penDown = true;
+      if (!penHeldPan && map.dragPan.isEnabled()) {
+        penHeldPan = true;
+        map.dragPan.disable();
+      }
+      if (pen.mode() === "auto" && !penSeen) {
+        penSeen = true;
+        pen.detected();
+      }
+    }
+    if (event.button === 1) {
+      /* MapLibre pans with the left button only; the middle button pans here, and never pastes (Linux). */
+      event.preventDefault();
+      middlePan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      window.addEventListener("pointermove", onMiddleMove);
+      window.addEventListener("pointerup", onMiddleUp);
+      return;
+    }
+    /* With pen mode on, a finger is for moving the map, and a palm next to a pen is nothing at all. */
+    if (event.pointerType === "touch" && (penActive() || penDown)) return;
+    if (spaceDown && event.button === 0) return;
     if (event.pointerType !== "mouse") fingers.add(event.pointerId);
     if (fingers.size > 1) multiTouch = true;
     if (event.button !== 0) return;
@@ -149,7 +202,45 @@ export function attachPointerInput(map: MapLibreMap, handler: PointerHandler): (
     if (press && event.pointerId === press.pointerId) abandon();
   }
 
+  function onMiddleMove(event: PointerEvent) {
+    if (!middlePan || event.pointerId !== middlePan.pointerId) return;
+    map.panBy([middlePan.x - event.clientX, middlePan.y - event.clientY], { duration: 0 });
+    middlePan = { ...middlePan, x: event.clientX, y: event.clientY };
+  }
+
+  function onMiddleUp(event: PointerEvent) {
+    if (!middlePan || event.pointerId !== middlePan.pointerId) return;
+    middlePan = null;
+    window.removeEventListener("pointermove", onMiddleMove);
+    window.removeEventListener("pointerup", onMiddleUp);
+  }
+
+  const onAuxClick = (event: MouseEvent) => {
+    if (event.button === 1) event.preventDefault();
+  };
+  const onMouseDown = (event: MouseEvent) => {
+    /* Stops the browser's autoscroll and the X11 primary-selection paste. */
+    if (event.button === 1) event.preventDefault();
+  };
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === " " && !isTyping(event.target)) spaceDown = true;
+  };
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.key === " ") spaceDown = false;
+  };
+  const onBlur = () => {
+    spaceDown = false;
+  };
+
+  const releasePen = () => {
+    penDown = false;
+    if (penHeldPan) map.dragPan.enable();
+    penHeldPan = false;
+  };
+
   function onFingerUp(event: PointerEvent) {
+    if (event.pointerType === "pen") releasePen();
     fingers.delete(event.pointerId);
     if (fingers.size === 0) multiTouch = false;
   }
@@ -163,6 +254,11 @@ export function attachPointerInput(map: MapLibreMap, handler: PointerHandler): (
   }
 
   surface.addEventListener("pointerdown", onDown);
+  surface.addEventListener("auxclick", onAuxClick);
+  surface.addEventListener("mousedown", onMouseDown);
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keyup", onKeyUp, true);
+  window.addEventListener("blur", onBlur);
   surface.addEventListener("pointermove", onHover);
   surface.addEventListener("pointerleave", onLeave);
   window.addEventListener("pointerup", onFingerUp, true);
@@ -170,9 +266,17 @@ export function attachPointerInput(map: MapLibreMap, handler: PointerHandler): (
 
   return () => {
     abandon();
+    releasePen();
     window.removeEventListener("pointerup", onFingerUp, true);
     window.removeEventListener("pointercancel", onFingerUp, true);
     surface.removeEventListener("pointerdown", onDown);
+    surface.removeEventListener("auxclick", onAuxClick);
+    surface.removeEventListener("mousedown", onMouseDown);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("pointermove", onMiddleMove);
+    window.removeEventListener("pointerup", onMiddleUp);
     surface.removeEventListener("pointermove", onHover);
     surface.removeEventListener("pointerleave", onLeave);
   };

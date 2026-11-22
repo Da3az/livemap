@@ -112,6 +112,8 @@ export function StatusBar() {
   const snapping = useEditorStore((state) => state.view.snapping);
   const labels = useEditorStore((state) => state.doc.settings.basemap.labelLanguage);
   const readOnly = useEditorStore((state) => state.access.readOnly !== null);
+  const penMode = useEditorStore((state) => state.view.penMode);
+  const penOn = penMode === "on";
   const height = touch ? "h-11" : "h-6";
   const scale = controller && ready ? roundScale(controller.getResolution() * PIXELS_PER_METRE) : null;
 
@@ -134,6 +136,20 @@ export function StatusBar() {
           {t.status.labelLanguage[labels]}
         </Cell>
         <FurnitureSwitch height={height} />
+        {/* Pen mode turns itself on at the first stylus contact; it shows from then on, or wherever a finger is the pointer. */}
+        {touch || penMode !== "auto" ? (
+          <button
+            type="button"
+            aria-pressed={penOn}
+            disabled={readOnly}
+            title={penOn ? t.dock.penOn : t.dock.penOff}
+            onClick={() => store.setPenMode(penOn ? "off" : "on")}
+            className={cn("flex items-center gap-1.5 rounded-key px-1.5 whitespace-nowrap hover:bg-well disabled:pointer-events-none", height)}
+          >
+            <span className="text-ink-3">{t.dock.pen}</span>
+            <span className="font-medium text-ink-2">{penOn ? t.status.on : t.status.off}</span>
+          </button>
+        ) : null}
         <button
           type="button"
           aria-pressed={snapping}

@@ -3,6 +3,7 @@ import type { MapFeature, MapSettings } from "@/model/types";
 import type { UiDir } from "./doc";
 import { selectControllerDrawDefaults, selectDrawOrder, selectTimeWindow } from "./selectors";
 import type { EditorStore } from "./store";
+import type { PenMode } from "./state";
 import type { TimeWindow } from "./time";
 
 interface Sent {
@@ -12,6 +13,8 @@ interface Sent {
   tool: ToolId | null;
   reshapingId: string | null | undefined;
   snapping: boolean | null;
+  toolLocked: boolean | null;
+  penMode: PenMode | null;
   timeWindow: TimeWindow | null | undefined;
   drawDefaults: Partial<MapFeature> | null | undefined;
   dir: UiDir | null;
@@ -47,6 +50,8 @@ export function connectController(store: EditorStore, controller: EditorControll
     tool: null,
     reshapingId: undefined,
     snapping: null,
+    toolLocked: null,
+    penMode: null,
     timeWindow: undefined,
     drawDefaults: undefined,
     dir: null,
@@ -108,6 +113,15 @@ export function connectController(store: EditorStore, controller: EditorControll
         controller.setSnapping(state.view.snapping);
       }
 
+      if (state.view.toolLocked !== sent.toolLocked) {
+        sent.toolLocked = state.view.toolLocked;
+        controller.setToolLocked(state.view.toolLocked);
+      }
+      if (state.view.penMode !== sent.penMode) {
+        sent.penMode = state.view.penMode;
+        controller.setPenMode(state.view.penMode);
+      }
+
       const timeWindow = selectTimeWindow(state);
       if (timeWindow !== sent.timeWindow) {
         sent.timeWindow = timeWindow;
@@ -159,6 +173,9 @@ export function connectController(store: EditorStore, controller: EditorControll
       }
     }),
     controller.on("draw", (progress) => store.setDrawProgress(progress)),
+    controller.on("crosshair", (on) => store.setCrosshair(on)),
+    /* A stylus seen in "auto" mode: from now on pen mode is on, and the status bar shows it. */
+    controller.on("pen", () => store.setPenMode("on")),
     controller.on("pointer", (info) => store.setPointer(info)),
     controller.on("viewport", (viewport) => store.setViewport(viewport)),
     controller.on("ready", () => store.setEngineReady(true)),
