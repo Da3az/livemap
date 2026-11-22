@@ -12,6 +12,7 @@ import { isMac } from "../shared/format";
 import { useEditorLayout } from "../shared/layout";
 import { Tip } from "../shared/tip";
 import { useEditorUi } from "../shared/ui";
+import { MapContextMenu } from "./context-menu";
 import { Furniture } from "./furniture";
 import { ZoomControls } from "./zoom-controls";
 
@@ -113,6 +114,7 @@ export function MapArea({ mapRef }: { mapRef: (element: HTMLElement | null) => v
       <MessageRail />
       <ZoomControls bottom={bottom} />
       <ToolDock onHeight={setDockHeight} />
+      <MapContextMenu />
       {ui.previewOpen ? (
         <div className="absolute inset-0 z-40 bg-page">
           <Suspense fallback={null}>

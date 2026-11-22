@@ -174,6 +174,7 @@ export function connectController(store: EditorStore, controller: EditorControll
     }),
     controller.on("draw", (progress) => store.setDrawProgress(progress)),
     controller.on("crosshair", (on) => store.setCrosshair(on)),
+    controller.on("moving", (on) => store.setMoving(on)),
     /* A stylus seen in "auto" mode: from now on pen mode is on, and the status bar shows it. */
     controller.on("pen", () => store.setPenMode("on")),
     controller.on("pointer", (info) => store.setPointer(info)),

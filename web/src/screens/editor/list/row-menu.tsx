@@ -8,7 +8,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatShortcut, shortcutFor, useEditorStore, useEditorStoreApi, type CommandId, type ListTree } from "@/editor/store";
+import { formatShortcut, runCommand, shortcutFor, useEditorStore, useEditorStoreApi, type CommandId, type ListTree } from "@/editor/store";
 import { useListStrings } from "@/i18n/editor-list";
 import { useEditorRuntime } from "../runtime";
 import { isMac } from "../shared/format";
@@ -51,15 +51,10 @@ export function RowMenu({
   const { controller } = useEditorRuntime();
   const readOnly = useEditorStore((state) => state.access.readOnly !== null);
   const selection = useEditorStore((state) => state.selection);
-  const canPasteStyle = useEditorStore((state) => state.clipboard.style !== null);
 
   const groupRow = target && isGroupKey(target.key) ? tree.groups.find((group) => group.id === groupIdOf(target.key)) : undefined;
   const ids = selection.ids;
   const rows = [...tree.groups.flatMap((group) => group.features), ...tree.ungrouped].filter((row) => ids.includes(row.id));
-  const allHidden = rows.length > 0 && rows.every((row) => row.hidden);
-  const allLocked = rows.length > 0 && rows.every((row) => row.locked);
-  const inGroup = rows.find((row) => row.groupId !== null)?.groupId ?? null;
-  const single = rows.length === 1 ? rows[0] : undefined;
 
   const groupItems = groupRow ? (
     <>
@@ -67,7 +62,10 @@ export function RowMenu({
         {t.rename}
         <Keys keys="F2" />
       </DropdownMenuItem>
-      <DropdownMenuItem onAction={() => controller?.fitFeatures(groupRow.features.map((row) => row.id))} isDisabled={groupRow.features.length === 0}>
+      <DropdownMenuItem
+        onAction={() => controller?.fitFeatures(groupRow.features.map((row) => row.id))}
+        isDisabled={groupRow.features.length === 0}
+      >
         {t.zoomTo}
       </DropdownMenuItem>
       <DropdownMenuSeparator />
@@ -79,9 +77,14 @@ export function RowMenu({
         {groupRow.locked ? t.unlock : t.lock}
         <Keys command="arrange.toggleLocked" />
       </DropdownMenuItem>
-      <DropdownMenuItem onAction={() => store.setGroupCollapsed(groupRow.id, !groupRow.collapsed)}>{groupRow.collapsed ? t.expand : t.collapse}</DropdownMenuItem>
+      <DropdownMenuItem onAction={() => store.setGroupCollapsed(groupRow.id, !groupRow.collapsed)}>
+        {groupRow.collapsed ? t.expand : t.collapse}
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
-      <DropdownMenuItem isDisabled={readOnly || tree.groups[0]?.id === groupRow.id} onAction={() => void stepGroup(store, tree, groupRow.id, -1)}>
+      <DropdownMenuItem
+        isDisabled={readOnly || tree.groups[0]?.id === groupRow.id}
+        onAction={() => void stepGroup(store, tree, groupRow.id, -1)}
+      >
         {t.moveGroupUp}
         <Keys keys="Alt+↑" />
       </DropdownMenuItem>
@@ -106,9 +109,45 @@ export function RowMenu({
     </>
   ) : null;
 
-  const featureItems = !groupRow ? (
+  return (
+    <Popover
+      triggerRef={anchorRef}
+      isOpen={target !== null && (groupRow !== undefined || rows.length > 0)}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      placement="bottom start"
+      offset={2}
+      className={POPOVER}
+    >
+      <Menu aria-label={groupRow ? t.groupMenuLabel : t.menuLabel(rows.length)} onClose={onClose} className="outline-none">
+        {groupItems}
+        {groupRow ? null : <FeatureMenuItems tree={tree} onRename={onRename} />}
+      </Menu>
+    </Popover>
+  );
+}
+
+/**
+ * The commands for the selected features. The list's row menu and the map's
+ * right-click menu both show them; only the list can rename in place.
+ */
+export function FeatureMenuItems({ tree, onRename }: { tree: ListTree; onRename?: (key: string) => void }) {
+  const t = useListStrings();
+  const store = useEditorStoreApi();
+  const { controller } = useEditorRuntime();
+  const readOnly = useEditorStore((state) => state.access.readOnly !== null);
+  const ids = useEditorStore((state) => state.selection.ids);
+  const canPasteStyle = useEditorStore((state) => state.clipboard.style !== null);
+  const rows = [...tree.groups.flatMap((group) => group.features), ...tree.ungrouped].filter((row) => ids.includes(row.id));
+  const allHidden = rows.length > 0 && rows.every((row) => row.hidden);
+  const allLocked = rows.length > 0 && rows.every((row) => row.locked);
+  const inGroup = rows.find((row) => row.groupId !== null)?.groupId ?? null;
+  const single = rows.length === 1 ? rows[0] : undefined;
+
+  return (
     <>
-      {single ? (
+      {single && onRename ? (
         <DropdownMenuItem isDisabled={readOnly} onAction={() => onRename(single.id)}>
           {t.rename}
           <Keys keys="F2" />
@@ -123,6 +162,13 @@ export function RowMenu({
       <DropdownMenuItem onAction={() => controller?.fitFeatures([...ids])}>
         {t.zoomTo}
         <Keys command="view.zoomToSelection" />
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        isDisabled={readOnly || rows.every((row) => row.effectiveLocked)}
+        onAction={() => runCommand("edit.move", { store, controller })}
+      >
+        {t.move}
+        <Keys command="edit.move" />
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem isDisabled={readOnly} onAction={() => store.duplicate()}>
@@ -169,7 +215,9 @@ export function RowMenu({
         <Keys command="arrange.group" />
       </DropdownMenuItem>
       <DropdownMenuSub>
-        <DropdownMenuSubTrigger isDisabled={readOnly || (tree.groups.length === 0 && inGroup === null)}>{t.moveToGroup}</DropdownMenuSubTrigger>
+        <DropdownMenuSubTrigger isDisabled={readOnly || (tree.groups.length === 0 && inGroup === null)}>
+          {t.moveToGroup}
+        </DropdownMenuSubTrigger>
         <DropdownMenuSubContent className="min-w-40">
           {tree.groups.map((group) => (
             <DropdownMenuItem key={group.id} textValue={group.name.value} onAction={() => store.moveToGroup(group.id)}>
@@ -194,23 +242,5 @@ export function RowMenu({
         <Keys command="edit.delete" />
       </DropdownMenuItem>
     </>
-  ) : null;
-
-  return (
-    <Popover
-      triggerRef={anchorRef}
-      isOpen={target !== null && (groupRow !== undefined || rows.length > 0)}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-      placement="bottom start"
-      offset={2}
-      className={POPOVER}
-    >
-      <Menu aria-label={groupRow ? t.groupMenuLabel : t.menuLabel(rows.length)} onClose={onClose} className="outline-none">
-        {groupItems}
-        {featureItems}
-      </Menu>
-    </Popover>
   );
 }

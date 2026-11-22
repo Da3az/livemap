@@ -59,6 +59,8 @@ export class SelectTool implements Tool {
   private lastDoubleClick = 0;
   /** A burst of arrow-key nudges in progress: what it started from, and the timer that ends it. */
   private nudging: { originals: MapFeature[]; moved: MapFeature[]; timer: number } | null = null;
+  /** "Move" waiting for its destination: the selection as it was, and its centre in Mercator. */
+  private placing: { originals: MapFeature[]; centre: Pt; previewed: boolean } | null = null;
 
   constructor(private readonly host: ToolHost) {}
 
@@ -76,6 +78,8 @@ export class SelectTool implements Tool {
   /* ---------------------------------------------------------------- pointer */
 
   down(sample: PointerSample): boolean {
+    /* While a move waits for its destination, a press is either that click or a pan. */
+    if (this.placing) return false;
     const handle = this.handleAt(sample);
     const reshaped = this.reshaped();
     if (handle && reshaped) {
@@ -155,6 +159,11 @@ export class SelectTool implements Tool {
   }
 
   click(sample: PointerSample): void {
+    if (this.placing) {
+      this.host.commit(this.placedAt(sample));
+      this.endMove();
+      return;
+    }
     const gesture = this.gesture;
     this.gesture = null;
     if (gesture?.type === "vertex") {
@@ -192,12 +201,40 @@ export class SelectTool implements Tool {
     this.host.reshape(hit);
   }
 
-  hover(): void {}
-  leave(): void {}
+  hover(sample: PointerSample): void {
+    if (!this.placing) return;
+    this.placing.previewed = true;
+    this.host.update(this.placedAt(sample));
+  }
+
+  leave(): void {
+    if (!this.placing?.previewed) return;
+    this.placing.previewed = false;
+    this.host.update(this.placing.originals);
+  }
+
+  /** Start a move by destination. False when nothing selected can move. */
+  startMove(): boolean {
+    this.cancel();
+    const originals = [...this.host.selection()].filter((id) => this.host.isSelectable(id)).flatMap((id) => this.host.feature(id) ?? []);
+    const points = originals.flatMap((feature) => vertexParts(feature).flat().map(lngLatToMerc));
+    if (points.length === 0) return false;
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const centre = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+    this.placing = { originals, centre, previewed: false };
+    this.host.moving(true);
+    this.host.repaint();
+    return true;
+  }
 
   /* --------------------------------------------------------------- commands */
 
   key(event: KeyboardEvent): boolean {
+    if (this.placing && event.key === "Escape") {
+      this.cancel();
+      return true;
+    }
     const direction = arrowDirection(event.key);
     if (direction) return this.nudge(direction, event.shiftKey ? 10 : 1);
     if (event.key === "Escape") {
@@ -230,6 +267,10 @@ export class SelectTool implements Tool {
   }
 
   cancel(): void {
+    if (this.placing) {
+      if (this.placing.previewed) this.host.abandon(this.placing.originals);
+      this.endMove();
+    }
     this.settleNudge();
     const gesture = this.gesture;
     this.gesture = null;
@@ -248,6 +289,7 @@ export class SelectTool implements Tool {
   }
 
   cursor(sample: PointerSample | null): string {
+    if (this.placing) return "crosshair";
     if (this.gesture?.type === "move" || this.gesture?.type === "vertex") return "grabbing";
     if (!sample) return "";
     if (this.handleAt(sample)) return "pointer";
@@ -356,6 +398,21 @@ export class SelectTool implements Tool {
     this.nudging = null;
     window.clearTimeout(nudging.timer);
     this.host.commit(nudging.moved);
+  }
+
+  /** The selection moved so its centre sits under the pointer. */
+  private placedAt(sample: PointerSample): MapFeature[] {
+    const placing = this.placing;
+    if (!placing) return [];
+    const to = this.host.renderer.view().unproject(sample);
+    const offset = { x: to.x - placing.centre.x, y: to.y - placing.centre.y };
+    return placing.originals.map((feature) => translateFeature(feature, offset));
+  }
+
+  private endMove(): void {
+    this.placing = null;
+    this.host.moving(false);
+    this.host.repaint();
   }
 
   private removeVertex(ref: VertexRef): void {

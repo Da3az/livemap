@@ -24,6 +24,8 @@ export interface InputWiring {
   /** Anything done on the map: an undo after it no longer reopens the last shape. */
   interacted: () => void;
   pen: PenControl;
+  /** A right-click on the map, at a map point and at viewport (client) coordinates. */
+  contextMenu: (sample: PointerSample, client: { x: number; y: number }) => void;
 }
 
 /** Routes the map's pointer and key events to the active tool. Returns the disposer. */
@@ -104,6 +106,17 @@ export function wireInput(wiring: InputWiring): () => void {
   };
   surface.addEventListener("keydown", onKey);
 
+  /* The browser's own menu has nothing for the map; ours has what the list's row menu has. A long press on touch is the box select instead. */
+  const onContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+    if ("pointerType" in event && (event as PointerEvent).pointerType === "touch") return;
+    const bounds = map.getCanvasContainer().getBoundingClientRect();
+    const sample: PointerSample = { x: event.clientX - bounds.left, y: event.clientY - bounds.top, shift: event.shiftKey, ctrl: event.ctrlKey || event.metaKey, touch: false };
+    wiring.interacted();
+    wiring.contextMenu(sample, { x: event.clientX, y: event.clientY });
+  };
+  map.getCanvasContainer().addEventListener("contextmenu", onContextMenu);
+
   /* Keys the tool claims wherever focus is, unless the person is typing. */
   const onWindowKey = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -124,6 +137,7 @@ export function wireInput(wiring: InputWiring): () => void {
     cancelAnimationFrame(pointerFrame);
     detach();
     surface.removeEventListener("keydown", onKey);
+    map.getCanvasContainer().removeEventListener("contextmenu", onContextMenu);
   };
 }
 

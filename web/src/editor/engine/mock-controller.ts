@@ -95,6 +95,11 @@ export function createMockController(options: ControllerOptions): MockController
     panBy: (x, y) => record("panBy", x, y),
     setToolLocked: (locked) => record("setToolLocked", locked),
     setPenMode: (mode) => record("setPenMode", mode),
+    startMove: () => {
+      record("startMove");
+      return false;
+    },
+    addAt: (kind, at) => record("addAt", kind, at),
     setCrosshair: (on) => record("setCrosshair", on),
     placeAtCrosshair: () => record("placeAtCrosshair"),
     undoPoint: () => false,

@@ -64,6 +64,7 @@ export function DrawProgress() {
   const tool = useEditorStore((state) => state.tool);
   const draw = useEditorStore((state) => state.live.draw);
   const crosshair = useEditorStore((state) => state.live.crosshair);
+  const moving = useEditorStore((state) => state.live.moving);
   const featureCount = useEditorStore((state) => state.doc.features.size);
   const [arrowHint, setArrowHint] = useState(() => !arrowHintSeen());
   const announcement = useAnnouncement(t.draw.announce, crosshair, draw?.points ?? 0, draw !== null, featureCount);
@@ -81,7 +82,23 @@ export function DrawProgress() {
     </span>
   );
   /* The live region stays mounted whatever the tool, or a change of tool would swallow what it was saying. */
-  if (tool === "select") return <>{announcer}</>;
+  if (tool === "select") {
+    return (
+      <>
+        {announcer}
+        {moving ? (
+          <div className="pointer-events-auto flex min-h-8 max-w-full items-center gap-3 rounded-pill border border-rule-strong bg-panel py-1 ps-3.5 pe-1.5 text-xs shadow-dock">
+            <span role="status" className="min-w-0 truncate font-medium text-ink">
+              {t.draw.moveHint}
+            </span>
+            <Button size={touch ? "touch" : "sm"} variant="ghost" className="rounded-pill" onPress={() => controller?.cancel()}>
+              {t.draw.cancel}
+            </Button>
+          </div>
+        ) : null}
+      </>
+    );
+  }
   const points = draw?.points ?? 0;
   const size = touch ? "touch" : "sm";
   const drawing = draw !== null && points > 0;

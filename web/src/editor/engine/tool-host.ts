@@ -95,6 +95,7 @@ export function createToolHost(bridge: HostBridge): ToolHost {
     },
     toolLocked: () => bridge.toolLocked(),
     crosshair: (on) => events.emit("crosshair", on),
+    moving: (on) => events.emit("moving", on),
     crosshairScreen: () => bridge.crosshairScreen(),
     finished: (finished) => bridge.finished(finished),
     reject: (detail) => events.emit("problem", { code: "shape_rejected", detail }),

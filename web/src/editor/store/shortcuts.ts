@@ -25,6 +25,7 @@ export type CommandId =
   | "edit.copyStyle"
   | "edit.pasteStyle"
   | "edit.reshape"
+  | "edit.move"
   | "edit.escape"
   | "arrange.group"
   | "arrange.ungroup"
@@ -138,6 +139,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "edit.copyStyle", keys: "Mod+Alt+C", label: bi("Copy style", "نسخ النمط"), section: "edit", context: "selection" },
   { id: "edit.pasteStyle", keys: "Mod+Alt+V", label: bi("Paste style", "لصق النمط"), section: "edit", context: "selection" },
   { id: "edit.reshape", keys: "Enter", label: bi("Edit shape", "تعديل الشكل"), section: "edit", context: "selection" },
+  { id: "edit.move", keys: "M", label: bi("Move, then click where it goes", "نقل، ثم انقر حيث يذهب"), section: "edit", context: "selection" },
   { id: "edit.escape", keys: "Escape", label: bi("Cancel or deselect", "إلغاء أو إزالة التحديد"), section: "edit", context: "always" },
 
   { id: "arrange.group", keys: "Mod+G", label: bi("Group", "تجميع"), section: "arrange", context: "selection" },
@@ -355,8 +357,12 @@ export function runCommand(id: CommandId, environment: CommandEnvironment): bool
       store.setReshaping(primary);
       return true;
     }
+    case "edit.move":
+      if (controller === null || state.selection.ids.length === 0) return false;
+      if (state.tool !== "select") store.setTool("select");
+      return controller.startMove();
     case "edit.escape":
-      if (state.live.draw !== null && controller !== null) {
+      if ((state.live.draw !== null || state.live.moving) && controller !== null) {
         controller.cancel();
         return true;
       }

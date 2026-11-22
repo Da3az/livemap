@@ -111,7 +111,16 @@ const en = {
     penOn: "Pen mode is on: the pen draws, a finger moves the map",
     penOff: "Pen mode is off: pen and fingers both draw",
   },
+  mapMenu: {
+    label: "Map",
+    select: "Select",
+    addIcon: "Add icon here",
+    addText: "Add text here",
+    copyCoordinates: "Copy coordinates",
+    pasteHere: "Paste here",
+  },
   draw: {
+    moveHint: "Click or tap where the selection should go",
     startArea: "Click the map to start the outline",
     startLine: "Click the map to start the line",
     startArrow: "Click where the arrow starts",
@@ -305,7 +314,16 @@ const ar: typeof en = {
     penOn: "وضع القلم مفعّل: القلم يرسم والإصبع يحرّك الخريطة",
     penOff: "وضع القلم متوقف: القلم والأصابع ترسم كلاهما",
   },
+  mapMenu: {
+    label: "الخريطة",
+    select: "تحديد",
+    addIcon: "إضافة رمز هنا",
+    addText: "إضافة نص هنا",
+    copyCoordinates: "نسخ الإحداثيات",
+    pasteHere: "لصق هنا",
+  },
   draw: {
+    moveHint: "انقر أو المس المكان الذي يُنقل إليه التحديد",
     startArea: "انقر على الخريطة لبدء حدود المنطقة",
     startLine: "انقر على الخريطة لبدء الخط",
     startArrow: "انقر حيث يبدأ السهم",

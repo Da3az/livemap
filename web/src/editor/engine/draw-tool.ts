@@ -216,6 +216,11 @@ export class DrawTool implements Tool {
     this.refresh();
   }
 
+  /** Place a point, an icon or a note at a place given by other means than the pointer: a menu, say. */
+  placeAtLngLat(at: LngLat): void {
+    this.placeAt(at, null);
+  }
+
   /** Place a point (or an icon, or a note) where the crosshair is. */
   placeAtCrosshair(): void {
     const at = this.crosshairPoint();

@@ -3,7 +3,7 @@ import { Button as RacButton } from "react-aria-components";
 import { Icon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { formatShortcut, selectDrawOrder, shortcutFor, useEditorStore, useEditorStoreApi, type CommandId } from "@/editor/store";
+import { formatShortcut, runCommand, selectDrawOrder, shortcutFor, useEditorStore, useEditorStoreApi, type CommandId } from "@/editor/store";
 import { useLang } from "@/i18n";
 import { useInspectorStrings } from "@/i18n/editor-inspector";
 import type { MapFeature } from "@/model/types";
@@ -114,6 +114,14 @@ export function ShapeSection({ summary, disabled }: SectionProps) {
   const reshapingId = useEditorStore((state) => state.view.reshapingId);
   const feature = summary.single;
   const size = touch ? "touch" : "default";
+  /* The no-drag way to move: the next click or tap on the map is the destination. */
+  const move = (
+    <Tip label={t.shape.moveTip} keys={formatShortcut(shortcutFor("edit.move")?.keys ?? "", isMac())}>
+      <Button variant="ghost" size={size} isDisabled={disabled} onPress={() => runCommand("edit.move", { store, controller })}>
+        {t.shape.move}
+      </Button>
+    </Tip>
+  );
 
   if (!feature) {
     return (
@@ -121,6 +129,7 @@ export function ShapeSection({ summary, disabled }: SectionProps) {
         <Button variant="outline" size={size} onPress={() => controller?.fitFeatures([...summary.ids])}>
           {t.shape.zoom}
         </Button>
+        {move}
         <span className="flex-1" />
         <StyleMenu disabled={disabled} />
       </div>
@@ -141,6 +150,7 @@ export function ShapeSection({ summary, disabled }: SectionProps) {
         <Button variant="ghost" size={size} onPress={() => controller?.fitFeatures([feature.id])}>
           {t.shape.zoom}
         </Button>
+        {move}
         <span className="flex-1" />
         <StyleMenu disabled={disabled} />
       </div>

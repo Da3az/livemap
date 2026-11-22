@@ -40,6 +40,8 @@ export interface ToolHost {
   toolLocked(): boolean;
   /** Keyboard placement started or stopped: the interface shows its buttons while it is on. */
   crosshair(on: boolean): void;
+  /** A move by destination started (true) or ended (false). */
+  moving(on: boolean): void;
   /** Where the crosshair sits: the centre of the map that panes and the dock leave visible, in CSS pixels. */
   crosshairScreen(): Pt;
   /** A shape was just finished, so an undo straight after can reopen it. */

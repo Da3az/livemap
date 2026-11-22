@@ -220,6 +220,22 @@ class MapLibreController implements EditorController {
     this.penMode = mode;
   }
 
+  startMove(): boolean {
+    if (!this.interactive || !this.selectTool || this.tool !== this.selectTool) return false;
+    const started = this.selectTool.startMove();
+    this.refreshCursor();
+    return started;
+  }
+
+  addAt(kind: "point" | "annotation", at: LngLat): void {
+    if (!this.interactive) return;
+    if (this.toolId !== kind) {
+      this.setTool(kind);
+      this.events.emit("tool", kind);
+    }
+    if (this.tool instanceof DrawTool) this.tool.placeAtLngLat(at);
+  }
+
   setCrosshair(on: boolean): void {
     if (this.tool instanceof DrawTool) this.tool.setKeyboard(on);
   }
@@ -445,8 +461,19 @@ class MapLibreController implements EditorController {
         },
         refreshCursor: () => this.refreshCursor(),
         pen: { mode: () => this.penMode, detected: () => this.events.emit("pen") },
+        contextMenu: (sample, client) => this.contextMenu(sample, client),
       }),
     );
+  }
+
+  /** A right-click: select what it hit, unless that is already selected, then report it for the menu. */
+  private contextMenu(sample: PointerSample, client: { x: number; y: number }): void {
+    if (!this.interactive) return;
+    const tolerance = this.coarsePointer ? 12 : 4;
+    const hitIds = this.renderer.hitTest(sample, tolerance).filter((id) => this.host.isSelectable(id));
+    const top = hitIds[0];
+    if (this.tool === this.selectTool && top !== undefined && !this.selected.has(top)) this.host.select([top], "replace");
+    this.events.emit("contextmenu", { ...client, at: this.unproject(sample), hitIds });
   }
 
   private refreshCursor(): void {

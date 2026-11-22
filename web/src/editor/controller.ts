@@ -87,6 +87,14 @@ export interface ControllerEvents {
   crosshair: (on: boolean) => void;
   /** A stylus touched the map while pen mode was "auto": the pen now draws and fingers move the map. */
   pen: () => void;
+  /** "Move" is waiting for its destination (true), or is done or cancelled (false). */
+  moving: (on: boolean) => void;
+  /**
+   * A right-click on the map. `x` and `y` are viewport (client) pixels for
+   * placing a menu; `hitIds` are the selectable features under the pointer,
+   * topmost first. The topmost was selected first unless already selected.
+   */
+  contextmenu: (info: { x: number; y: number; at: LngLat; hitIds: string[] }) => void;
   pointer: (info: PointerInfo) => void;
   viewport: (viewport: Viewport) => void;
   /** Something failed that the user should hear about (tiles, an unusable shape). */
@@ -185,6 +193,14 @@ export interface EditorController {
    * pans, and palms that touch the screen while the pen is down are ignored.
    */
   setPenMode(mode: "auto" | "on" | "off"): void;
+  /**
+   * Move the selection without dragging: the next click or tap on the map is
+   * where the selection's centre goes. Escape cancels. False when nothing
+   * movable is selected or a drawing tool is active.
+   */
+  startMove(): boolean;
+  /** Add an icon or a note at a place, as one click of its tool would. */
+  addAt(kind: "point" | "annotation", at: LngLat): void;
   /** Turn keyboard placement on for the active drawing tool: a crosshair stands in for the pointer. */
   setCrosshair(on: boolean): void;
   /** Place a point, an icon or a note at the crosshair. */

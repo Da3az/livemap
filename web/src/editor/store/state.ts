@@ -145,6 +145,8 @@ export interface LiveState {
   readonly draw: DrawProgress | null;
   /** Keyboard placement is on: the crosshair's buttons show. */
   readonly crosshair: boolean;
+  /** "Move" is waiting for the click that says where the selection goes. */
+  readonly moving: boolean;
   readonly pointer: PointerInfo | null;
   readonly viewport: Viewport | null;
   readonly problem: { code: "tiles_failed" | "shape_rejected" | "context_lost"; detail: string } | null;

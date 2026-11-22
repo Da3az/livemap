@@ -323,7 +323,7 @@ export class EditorStore {
       save: { kind: "idle" },
       publish: { kind: "idle" },
       clipboard: { features: [], style: null },
-      live: { ready: false, draw: null, crosshair: false, pointer: null, viewport: null, problem: null },
+      live: { ready: false, draw: null, crosshair: false, moving: false, pointer: null, viewport: null, problem: null },
       refusal: null,
     };
   }
@@ -625,6 +625,11 @@ export class EditorStore {
   /** Keyboard placement started or stopped. Called by the wiring. */
   setCrosshair(crosshair: boolean): void {
     if (this.state.live.crosshair !== crosshair) this.set({ live: { ...this.state.live, crosshair } });
+  }
+
+  /** A move by destination started or ended. Called by the wiring. */
+  setMoving(moving: boolean): void {
+    if (this.state.live.moving !== moving) this.set({ live: { ...this.state.live, moving } });
   }
 
   /** Where the pointer is. Called by the wiring. */
