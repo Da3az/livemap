@@ -2,7 +2,7 @@ import type { FillPattern } from "@/model/types";
 import { drawTile } from "../patterns";
 import type { GlCamera } from "./camera";
 import { DashRegistry, type ImageRegistry } from "./images";
-import { BYTES, type PrimBuffer } from "./prims";
+import { bufferChanges, BYTES, type PrimBuffer } from "./prims";
 import { FRAGMENT_SHADER, VERTEX_SHADER } from "./shaders";
 
 /** What one frame draws: the buffers in draw order, and the tables they refer to. */
@@ -69,7 +69,8 @@ export class GpuScene {
   private readonly uniforms: Record<string, WebGLUniformLocation | null> = {};
   private readonly textures: { visible: WebGLTexture; entries: WebGLTexture; atlas: WebGLTexture | null; patterns: WebGLTexture | null; dash: WebGLTexture };
 
-  private capacityInstances = 0;
+  /** The instance buffer's contents, kept on the CPU so changes go up in one range. */
+  private mirror = new Uint8Array(BYTES);
   private totalInstances = 0;
   private structure = -1;
   private readonly placed = new Map<PrimBuffer, Placement>();
@@ -77,6 +78,9 @@ export class GpuScene {
   private visibleRows = 0;
   private dashVersion = -1;
   private patternRatio = 0;
+  /** `bufferChanges()` and the image registry when instances and images were last brought up to date. */
+  private seenChanges = -1;
+  private seenRegistry: ImageRegistry | null = null;
 
   /* The atlas: shelves on layers of one texture array. */
   private atlasSize: number;
@@ -88,6 +92,11 @@ export class GpuScene {
   private entryData = new Int32Array(0);
   private entriesDirty = false;
   private scratch: HTMLCanvasElement | null = null;
+  private scratchContext: CanvasRenderingContext2D | null = null;
+  /** Measured cost of rasterising, per device pixel of image, for the per-frame budget. */
+  private rasterMsPerPixel = 0.00002;
+  /** True when the last draw left images to rasterise on a later frame. */
+  pending = false;
 
   constructor(private readonly gl: WebGL2RenderingContext) {
     const program = gl.createProgram();
@@ -231,39 +240,49 @@ export class GpuScene {
       }
     }
     if (!fits) {
-      /* Lay every buffer out again, each with room to grow, and upload the lot. */
+      /*
+       * Lay every buffer out again, each with room to grow, and upload the
+       * lot. A buffer never gets less room than it had: what is rebuilt per
+       * zoom (teeth, dashes) grows and shrinks, and should not force this again.
+       */
+      const previous = new Map(this.placed);
       this.placed.clear();
       let offset = 0;
       for (const buffer of list.buffers) {
-        const capacity = buffer.count === 0 ? 0 : buffer.count + Math.ceil(buffer.count / 4) + 4;
+        const had = previous.get(buffer)?.capacity ?? 0;
+        const capacity = buffer.count === 0 && had === 0 ? 0 : Math.max(had, buffer.count + Math.ceil(buffer.count / 2) + 8);
         this.placed.set(buffer, { offset, capacity, version: buffer.version });
         offset += capacity;
       }
       this.totalInstances = offset;
-      const bytes = new Uint8Array(Math.max(1, offset) * BYTES);
+      this.mirror = new Uint8Array(Math.max(1, offset) * BYTES);
       for (const buffer of list.buffers) {
         const place = this.placed.get(buffer);
-        if (place && buffer.count > 0) bytes.set(buffer.bytes(), place.offset * BYTES);
+        if (place && buffer.count > 0) this.mirror.set(buffer.bytes(), place.offset * BYTES);
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instances);
-      if (offset > this.capacityInstances || offset < this.capacityInstances / 4) {
-        this.capacityInstances = offset;
-        gl.bufferData(gl.ARRAY_BUFFER, bytes, gl.DYNAMIC_DRAW);
-      } else {
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, bytes);
-      }
+      gl.bufferData(gl.ARRAY_BUFFER, this.mirror, gl.DYNAMIC_DRAW);
       this.structure = list.structure;
       return;
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.instances);
+    /* Copy what changed into the mirror and upload the one range that spans it. */
+    let low = Infinity;
+    let high = -Infinity;
     for (const buffer of list.buffers) {
       const place = this.placed.get(buffer);
       if (!place || place.version === buffer.version) continue;
-      /* The tail beyond the new count is cleared to empty instances. */
-      const bytes = new Uint8Array(place.capacity * BYTES);
-      bytes.set(buffer.bytes());
-      gl.bufferSubData(gl.ARRAY_BUFFER, place.offset * BYTES, bytes);
+      const start = place.offset * BYTES;
+      const end = start + place.capacity * BYTES;
+      const bytes = buffer.bytes();
+      this.mirror.set(bytes, start);
+      this.mirror.fill(0, start + bytes.length, end);
       place.version = buffer.version;
+      low = Math.min(low, start);
+      high = Math.max(high, end);
+    }
+    if (high > low) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instances);
+      gl.bufferSubData(gl.ARRAY_BUFFER, low, this.mirror, low, high - low);
     }
   }
 
@@ -363,44 +382,118 @@ export class GpuScene {
     return at;
   }
 
-  private rasterise(entryId: number, registry: ImageRegistry, at: { x: number; y: number; layer: number }): void {
-    const entry = registry.get(entryId);
-    if (!entry) return;
-    const { gl } = this;
+  /**
+   * Rasterises a batch of entries side by side on one CPU-backed canvas, reads
+   * it back once, and uploads each entry's pixels to its place in the atlas.
+   * One readback per batch instead of one canvas upload per label.
+   */
+  private rasterise(batch: readonly { id: number; at: { x: number; y: number; layer: number } }[], registry: ImageRegistry): void {
+    const entries = batch.flatMap(({ id, at }) => {
+      const entry = registry.get(id);
+      return entry ? [{ entry, at }] : [];
+    });
+    if (entries.length === 0) return;
+    /* Shelves on the scratch canvas, no wider than the atlas. */
+    const limit = this.atlasSize;
+    let x = 0;
+    let y = 0;
+    let row = 0;
+    let width = 0;
+    const spots = entries.map(({ entry }) => {
+      if (x + entry.width > limit) {
+        y += row;
+        x = 0;
+        row = 0;
+      }
+      const spot = { x, y };
+      x += entry.width;
+      row = Math.max(row, entry.height);
+      width = Math.max(width, x);
+      return spot;
+    });
+    const height = y + row;
     const canvas = (this.scratch ??= document.createElement("canvas"));
-    canvas.width = entry.width;
-    canvas.height = entry.height;
-    const context = canvas.getContext("2d");
+    if (canvas.width < width || canvas.height < height) {
+      canvas.width = Math.max(canvas.width, width);
+      canvas.height = Math.max(canvas.height, height);
+      this.scratchContext = null;
+    }
+    const context = (this.scratchContext ??= canvas.getContext("2d", { willReadFrequently: true }));
     if (!context) return;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    entry.draw(context);
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, width, height);
+    entries.forEach(({ entry }, index) => {
+      const spot = spots[index]!;
+      context.save();
+      context.beginPath();
+      context.rect(spot.x, spot.y, entry.width, entry.height);
+      context.clip();
+      entry.draw(context, spot.x, spot.y);
+      context.restore();
+    });
+    /* Straight (not premultiplied) pixels; the shader premultiplies. Each entry is a sub-rectangle of the readback. */
+    const pixels = context.getImageData(0, 0, width, height).data;
+    const view = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+    const { gl } = this;
     gl.activeTexture(gl.TEXTURE0 + UNITS.atlas);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.textures.atlas);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, at.x, at.y, at.layer, entry.width, entry.height, 1, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-    this.resident.set(entryId, at);
-    const o = entryId * 8;
-    if (o + 8 > this.entryData.length) {
-      const next = new Int32Array(Math.max(o + 8, this.entryData.length * 2, ENTRY_WIDTH * 4));
-      next.set(this.entryData);
-      this.entryData = next;
-    }
-    this.entryData.set([at.x, at.y, entry.width, entry.height, at.layer, entry.originX, entry.originY, Math.round(entry.phaseX * 256) + Math.round(entry.phaseY * 256) * 1024], o);
+    this.plainUnpack(4);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, width);
+    /* For a 3D upload the rows a layer spans come from here; skipping rows needs the whole readback's height. */
+    gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, height);
+    entries.forEach(({ entry, at }, index) => {
+      const spot = spots[index]!;
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, spot.x);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, spot.y);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, at.x, at.y, at.layer, entry.width, entry.height, 1, gl.RGBA, gl.UNSIGNED_BYTE, view);
+      this.resident.set(entry.id, at);
+      const o = entry.id * 8;
+      if (o + 8 > this.entryData.length) {
+        const next = new Int32Array(Math.max(o + 8, this.entryData.length * 2, ENTRY_WIDTH * 4));
+        next.set(this.entryData);
+        this.entryData = next;
+      }
+      this.entryData.set([at.x, at.y, entry.width, entry.height, at.layer, entry.originX, entry.originY, Math.round(entry.phaseX * 256) + Math.round(entry.phaseY * 256) * 1024], o);
+    });
+    /* MapLibre does not track these; leave them at their defaults. */
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+    gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
     this.entriesDirty = true;
   }
 
-  /** Makes every image the buffers refer to resident, rebuilding the atlas with only those when it is full. */
-  private uploadImages(list: DrawList): void {
+  /**
+   * Makes every image the buffers refer to resident, rebuilding the atlas with
+   * only those when it is full. With a budget, rasterising stops once it is
+   * spent; what is left is drawn on later frames (`pending`).
+   */
+  private uploadImages(list: DrawList, budgetMs: number): void {
     if (list.images !== this.atlasRegistry) {
       this.atlasRegistry = list.images;
       this.allocateAtlas(Math.max(1, this.atlasLayers));
     }
     const wanted = new Set<number>();
     for (const buffer of list.buffers) for (const id of buffer.images) wanted.add(id);
-    const missing = [...wanted].filter((id) => !this.resident.has(id));
+    let missing = [...wanted].filter((id) => !this.resident.has(id));
+    this.pending = false;
+    if (Number.isFinite(budgetMs) && missing.length > 0) {
+      /* Rasterising costs roughly in proportion to area; estimate from what a batch took before. */
+      let area = 0;
+      const allowed: number[] = [];
+      for (const id of missing) {
+        const entry = list.images.get(id);
+        if (!entry) continue;
+        area += entry.width * entry.height;
+        if (allowed.length > 0 && area * this.rasterMsPerPixel > budgetMs) break;
+        allowed.push(id);
+      }
+      this.pending = allowed.length < missing.length;
+      missing = allowed;
+    }
     if (missing.length > 0) {
       let failed = false;
+      const batch: { id: number; at: { x: number; y: number; layer: number } }[] = [];
       for (const id of missing) {
         const entry = list.images.get(id);
         if (!entry) continue;
@@ -409,22 +502,31 @@ export class GpuScene {
           failed = true;
           break;
         }
-        this.rasterise(id, list.images, at);
+        batch.push({ id, at });
       }
-      if (failed) {
+      if (!failed) {
+        const started = performance.now();
+        this.rasterise(batch, list.images);
+        const area = batch.reduce((sum, { id }) => sum + (list.images.get(id)?.width ?? 0) * (list.images.get(id)?.height ?? 0), 0);
+        if (area > 2000) this.rasterMsPerPixel = (performance.now() - started) / area;
+      }
+      else {
         /* Start again with only what is drawn now, on as many layers as that needs. */
         let area = 0;
         for (const id of wanted) {
           const entry = list.images.get(id);
           if (entry) area += (entry.width + 1) * (entry.height + 1);
         }
-        const layers = Math.min(Math.max(ATLAS_BUDGET, this.atlasLayers), Math.max(1, Math.ceil((area * 1.3) / (this.atlasSize * this.atlasSize))) + 1);
-        this.allocateAtlas(Math.max(layers, Math.ceil((area * 1.3) / (this.atlasSize * this.atlasSize))));
+        /* Twice what is drawn now, within the budget, so new labels fit for a while before this happens again. */
+        const needed = Math.ceil((area * 1.15) / (this.atlasSize * this.atlasSize));
+        this.allocateAtlas(Math.max(needed, Math.min(ATLAS_BUDGET, needed * 2 + 1)));
+        const all: { id: number; at: { x: number; y: number; layer: number } }[] = [];
         for (const id of wanted) {
           const entry = list.images.get(id);
           const at = entry ? this.reserve(entry.width, entry.height) : null;
-          if (entry && at) this.rasterise(id, list.images, at);
+          if (at) all.push({ id, at });
         }
+        this.rasterise(all, list.images);
       }
     }
     if (this.entriesDirty) {
@@ -449,18 +551,33 @@ export class GpuScene {
 
   /* ------------------------------------------------------------------- draw */
 
-  /** Uploads what changed and draws every instance, in order, in one call. The context is left as it was found. */
-  draw(list: DrawList, target: DrawTarget): void {
+  /**
+   * Uploads what changed and draws every instance, in order, in one call.
+   *
+   * `restore: "full"` leaves the context exactly as it was found, at the cost
+   * of reading every value back. Inside MapLibre's render pass that is not
+   * needed: after a custom layer draws, MapLibre 6 marks all the state it
+   * tracks dirty and sets it again (`drawCustom` calls `context.setDirty()`
+   * and `painter.setBaseState()`), so `"untracked"` restores only what it
+   * does not track (the scissor test). A context of our own needs neither.
+   */
+  draw(list: DrawList, target: DrawTarget, restore: "full" | "untracked" | "none" = "full", imageBudgetMs = Infinity): void {
     const { gl } = this;
     if (gl.isContextLost()) return;
-    const saved = this.saveState();
+    const saved = restore === "full" ? this.saveState() : null;
+    const scissor = restore === "untracked" ? gl.isEnabled(gl.SCISSOR_TEST) : null;
     try {
       gl.bindVertexArray(null);
-      this.uploadInstances(list);
+      const changes = bufferChanges();
+      if (changes !== this.seenChanges || list.structure !== this.structure || list.images !== this.seenRegistry || this.pending) {
+        this.uploadInstances(list);
+        this.uploadImages(list, imageBudgetMs);
+        this.seenChanges = changes;
+        this.seenRegistry = list.images;
+      }
       this.uploadVisible(list);
       this.uploadDashes(list.dashes);
       this.uploadPatterns(target.pixelRatio);
-      this.uploadImages(list);
       if (this.totalInstances === 0) return;
 
       gl.useProgram(this.program);
@@ -496,7 +613,8 @@ export class GpuScene {
       gl.disable(gl.SCISSOR_TEST);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.totalInstances);
     } finally {
-      this.restoreState(saved);
+      if (saved) this.restoreState(saved);
+      if (scissor) gl.enable(gl.SCISSOR_TEST);
     }
   }
 }

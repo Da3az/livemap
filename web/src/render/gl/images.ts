@@ -22,8 +22,8 @@ export interface ImageEntry {
   /** Where within its pixel the anchor was when the entry was rasterised. */
   phaseX: number;
   phaseY: number;
-  /** Paints the entry into a context whose origin is its top-left corner, in device pixels. */
-  draw(context: CanvasRenderingContext2D): void;
+  /** Paints the entry with its top-left corner at (x, y) device pixels of the context. */
+  draw(context: CanvasRenderingContext2D, x: number, y: number): void;
 }
 
 const NO_PHASE: Pt = { x: 0, y: 0 };
@@ -72,8 +72,8 @@ export class ImageRegistry {
       originY,
       phaseX: phase.x,
       phaseY: phase.y,
-      draw: (context) => {
-        context.setTransform(pr, 0, 0, pr, -originX + phase.x, -originY + phase.y);
+      draw: (context, x, y) => {
+        context.setTransform(pr, 0, 0, pr, x - originX + phase.x, y - originY + phase.y);
         paint(context);
       },
     };

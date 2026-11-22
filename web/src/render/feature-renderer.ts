@@ -1,6 +1,6 @@
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { MapFeature, MapSettings } from "@/model/types";
-import type { Box, Pt } from "./geo";
+import { boxesOverlap, emptyBox, type Box, type Pt } from "./geo";
 import { cameraFor, projectWith, unprojectWith, type GlCamera } from "./gl/camera";
 import { FeatureLayerOwner } from "./gl/feature-layer";
 import { GpuScene, type DrawList } from "./gl/gpu-scene";
@@ -13,7 +13,7 @@ import { NarrowAnnotations } from "./narrow";
 import { readPalette, type Palette, type ThemeMode } from "./palette";
 import { TILE } from "./patterns";
 import { buildSceneItem, Scene, toTimeWindow, type SceneItem, type TimeWindow } from "./scene";
-import { buildShape, worldWrap, type ScreenShape } from "./shapes";
+import { arrowParts, buildShape, teethAlong, worldWrap, type ScreenShape } from "./shapes";
 import { fontEpoch, fontsReadyFor, onFontsLoaded } from "./text";
 import { readView, type View } from "./view";
 
@@ -70,6 +70,8 @@ interface ReferenceFrame {
   /** Screen position of the view's centre when the frame was built. */
   anchor: Pt;
   shapes: Map<SceneItem, ScreenShape>;
+  /** The mercator box view-dependent geometry is built for; null when pitched (the frame is rebuilt every frame). */
+  reach: Box | null;
 }
 
 const NO_PRIORITY: ReadonlySet<string> = new Set();
@@ -79,6 +81,10 @@ const REBASE_PX = 2 ** 18;
 /** Fraction of the view the map may pan before view-dependent geometry is rebuilt; teeth are built one view beyond each edge. */
 const PAN_MARGIN = 0.75;
 const MAX_IMAGES = 8192;
+/** How long the camera must be still before text is placed at its exact sub-pixel position. */
+const REST_MS = 200;
+/** Time each frame may spend rasterising text new to the atlas; the rest follows on the next frames. */
+const IMAGE_BUDGET_MS = 6;
 
 function key(p: Pt | null | undefined): string {
   return p ? `${p.x.toFixed(3)},${p.y.toFixed(3)}` : "-";
@@ -152,6 +158,15 @@ export class FeatureRenderer {
   private draftVersion = 0;
   /** Bumped when the camera comes to rest: text is rasterised again at its exact sub-pixel place. */
   private restEpoch = 0;
+  /**
+   * False while the camera moves: text then uses one rasterisation per label,
+   * snapped to whole pixels, instead of a new one for every sub-pixel place.
+   */
+  private atRest = true;
+  /** The sub-pixel phase each feature's text was last rasterised at. */
+  private readonly phases = new Map<string, Pt>();
+  /** What the last label placement was computed from, when it cannot depend on the pan. */
+  private placedInputs = "";
   /** Where the map's top-left corner is in the reference frame's coordinates, this frame. */
   private shift: Pt = { x: 0, y: 0 };
 
@@ -186,13 +201,32 @@ export class FeatureRenderer {
       },
     });
 
-    /* While the camera moves text is snapped to whole pixels; at rest it is placed exactly. */
-    const onRest = () => {
-      this.restEpoch++;
-      this.requestPaint();
+    /*
+     * While the camera moves text is snapped to whole pixels; once it has
+     * been still for a moment it is rasterised again at its exact place.
+     * `moveend` alone is not rest: every `jumpTo` ends a move.
+     */
+    let restTimer = 0;
+    const onMove = () => {
+      this.atRest = false;
+      window.clearTimeout(restTimer);
     };
-    map.on("moveend", onRest);
-    this.disposers.push(() => map.off("moveend", onRest));
+    const onMoveEnd = () => {
+      window.clearTimeout(restTimer);
+      restTimer = window.setTimeout(() => {
+        if (this.destroyed || map.isMoving()) return;
+        this.atRest = true;
+        this.restEpoch++;
+        this.requestPaint();
+      }, REST_MS);
+    };
+    map.on("move", onMove);
+    map.on("moveend", onMoveEnd);
+    this.disposers.push(() => {
+      window.clearTimeout(restTimer);
+      map.off("move", onMove);
+      map.off("moveend", onMoveEnd);
+    });
 
     /* The host may switch the document's theme class after telling us the theme; follow it. */
     const observer = new MutationObserver(() => this.refreshPalette());
@@ -402,7 +436,7 @@ export class FeatureRenderer {
           gl.viewport(0, 0, w, h);
           gl.clearColor(0, 0, 0, 0);
           gl.clear(gl.COLOR_BUFFER_BIT);
-          gpu.draw(list, { camera, base: this.base ?? camera.origin, pixelRatio, viewport: { width: w, height: h }, tile: { x, y }, patternOrigin });
+          gpu.draw(list, { camera, base: this.base ?? camera.origin, pixelRatio, viewport: { width: w, height: h }, tile: { x, y }, patternOrigin }, "none");
           /* The GL image's bottom-left is the tile's top-left row once flipped by the canvas. */
           context.drawImage(canvas, 0, tileHeight - h, w, h, x / pixelRatio, y / pixelRatio, w / pixelRatio, h / pixelRatio);
         }
@@ -455,7 +489,9 @@ export class FeatureRenderer {
       viewport: { width: gl.drawingBufferWidth, height: gl.drawingBufferHeight },
       tile: { x: 0, y: 0 },
       patternOrigin: { x: ((origin.x % TILE) + TILE) % TILE, y: ((origin.y % TILE) + TILE) % TILE },
-    });
+    }, "untracked", IMAGE_BUDGET_MS);
+    /* Text left for later frames: draw again until it is all there. */
+    if (gpu.pending) this.requestPaint();
   }
 
   /* ---------------------------------------------------------------- private */
@@ -497,9 +533,11 @@ export class FeatureRenderer {
       /* Colours or typefaces changed: every rasterised image and every primitive is stale. */
       this.sceneEpoch = epoch;
       this.images = new ImageRegistry(this.images.pixelRatio);
+      this.phases.clear();
       this.draws.clear();
       this.frame = null;
       this.labelKey = "";
+      this.placedInputs = "";
       this.draftKey = "";
     }
   }
@@ -551,7 +589,14 @@ export class FeatureRenderer {
       images: this.images,
       dashes: this.dashes,
       project,
-      textPhase: (screen) => phaseOf({ x: (screen.x - shift.x) * pr, y: (screen.y - shift.y) * pr }),
+      textPhase: (screen, id) => {
+        /* Moving, a label keeps the rasterisation it has; at rest it gets one for its exact place. */
+        const kept = this.atRest ? undefined : this.phases.get(id);
+        if (kept) return kept;
+        const phase = this.atRest ? phaseOf({ x: (screen.x - shift.x) * pr, y: (screen.y - shift.y) * pr }) : { x: 0, y: 0 };
+        this.phases.set(id, phase);
+        return phase;
+      },
     };
   }
 
@@ -561,9 +606,11 @@ export class FeatureRenderer {
     /* Every rest re-rasterises text at new phases; past this many images, start the registry again. */
     if (this.images.pixelRatio !== pixelRatio || this.images.entries.length > MAX_IMAGES) {
       this.images = new ImageRegistry(pixelRatio);
+      this.phases.clear();
       this.draws.clear();
       this.frame = null;
       this.labelKey = "";
+      this.placedInputs = "";
       this.draftKey = "";
     }
     const camera = cameraFor(view);
@@ -618,6 +665,7 @@ export class FeatureRenderer {
     this.sequence = sequence;
     if (this.frame) for (const item of this.frame.shapes.keys()) if (!next.has(item)) this.frame.shapes.delete(item);
     this.labelKey = "";
+    this.placedInputs = "";
     const buffers: PrimBuffer[] = [];
     for (const draw of sequence) {
       if (draw.fixed) buffers.push(draw.fixed);
@@ -641,9 +689,17 @@ export class FeatureRenderer {
     this.visibleVersion++;
   }
 
-  private needsShape(item: SceneItem): boolean {
+  /**
+   * Whether the frame needs this item's screen shape: everything that takes
+   * part in label placement, wherever it is (as the 2D renderer placed labels
+   * over the whole map), and, while pitched, arrows and front lines, whose
+   * geometry is then built from it.
+   */
+  private needsShape(item: SceneItem, window: Box | null): boolean {
     const kind = item.feature.kind;
-    return kind === "arrow" || kind === "frontline" || kind === "annotation" || kind === "point" || item.text !== null;
+    if (kind === "annotation" || kind === "point" || item.text !== null) return true;
+    /* Without pitch their geometry is built without a screen shape (see `buildMoving`). */
+    return (kind === "arrow" || kind === "frontline") && window === null;
   }
 
   /**
@@ -667,24 +723,58 @@ export class FeatureRenderer {
     if (!frame) {
       const window: Box | undefined = pitched ? undefined : { minX: -view.width, minY: -view.height, maxX: view.width * 2, maxY: view.height * 2 };
       const shapes = new Map<SceneItem, ScreenShape>();
-      for (const draw of this.sequence) if (this.needsShape(draw.item)) shapes.set(draw.item, buildShape(draw.item, view, window));
-      frame = { id: ++this.frameCounter, linearKey, view, camera, anchor: view.project(view.origin), shapes };
+      frame = { id: ++this.frameCounter, linearKey, view, camera, anchor: view.project(view.origin), shapes, reach: null };
+      frame.reach = pitched ? null : this.frameWindow(frame);
+      for (const draw of this.sequence) if (this.needsShape(draw.item, frame.reach)) shapes.set(draw.item, buildShape(draw.item, view, window));
       this.frame = frame;
       this.labelKey = "";
+      this.placedInputs = "";
     } else {
       /* Items that arrived since the frame was built (a drag replaces one per pointer move). */
       const window: Box | undefined = pitched ? undefined : { minX: -view.width, minY: -view.height, maxX: view.width * 2, maxY: view.height * 2 };
       for (const draw of this.sequence) {
-        if (this.needsShape(draw.item) && !frame.shapes.has(draw.item)) frame.shapes.set(draw.item, buildShape(draw.item, frame.view, window));
+        if (!frame.shapes.has(draw.item) && this.needsShape(draw.item, frame.reach)) frame.shapes.set(draw.item, buildShape(draw.item, frame.view, window));
       }
     }
 
     this.shift = shift;
+    /*
+     * Only what lies within the frame's window is rebuilt: anything further
+     * away is not on screen, and gets rebuilt by the frame that brings it near.
+     */
     const current = frame;
+    const reach = current.reach;
     for (const draw of this.sequence) {
-      if (draw.moving && draw.movingFrame !== current.id) this.buildMoving(draw, current);
+      if (!draw.moving || draw.movingFrame === current.id) continue;
+      if (reach && !boxesOverlap(reach, draw.item.box) && !this.nearAcrossWorlds(reach, draw.item.box)) continue;
+      this.buildMoving(draw, current);
     }
     this.placeText(current, shift);
+  }
+
+  /** The mercator box the frame's view-dependent geometry must be right in: the view and one view beyond each edge. */
+  private frameWindow(frame: ReferenceFrame): Box {
+    const { view } = frame;
+    const corners = [
+      { x: -view.width, y: -view.height },
+      { x: view.width * 2, y: -view.height },
+      { x: view.width * 2, y: view.height * 2 },
+      { x: -view.width, y: view.height * 2 },
+    ].map((p) => view.unproject(p));
+    const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    for (const p of corners) {
+      box.minX = Math.min(box.minX, p.x);
+      box.minY = Math.min(box.minY, p.y);
+      box.maxX = Math.max(box.maxX, p.x);
+      box.maxY = Math.max(box.maxY, p.y);
+    }
+    return box;
+  }
+
+  /** The window can straddle the antimeridian; compare against the neighbouring world copies too. */
+  private nearAcrossWorlds(window: Box, box: Box): boolean {
+    const shifted = (by: number) => ({ minX: box.minX + by, minY: box.minY, maxX: box.maxX + by, maxY: box.maxY });
+    return boxesOverlap(window, shifted(1)) || boxesOverlap(window, shifted(-1));
   }
 
   private toMerc(frame: ReferenceFrame): (p: Pt) => Pt {
@@ -703,10 +793,50 @@ export class FeatureRenderer {
     /* Mercator geometry draws at its nearest copy by itself; geometry carried back from the screen is already there. */
     buffer.wrapRef = geometric ? centre : centre + wrap;
     const project = geometric ? (p: Pt) => projectWith(frame.camera, { x: p.x + wrap, y: p.y }) : (p: Pt) => projectWith(frame.camera, p);
+    const flat = frame.reach !== null && (item.geometry.kind === "arrow" || item.geometry.kind === "frontline");
+    if (flat) this.emitFlat(buffer, item, frame, wrap);
+    else emitView(buffer, item, frame.shapes.get(item) ?? null, this.toMerc(frame), this.emitContext(project, this.shift));
     const shape = frame.shapes.get(item) ?? null;
-    emitView(buffer, item, shape, this.toMerc(frame), this.emitContext(project, this.shift));
     draw.movingFrame = frame.id;
     draw.noteKey = shape?.kind === "annotation" ? this.noteKey(shape) : "";
+  }
+
+  /**
+   * Arrows and front lines without pitch. The map is then a similarity of
+   * mercator (a scale and a turn), and heads, tapers, dash phases and teeth
+   * are defined in screen pixels in ways a turn does not change, so they are
+   * built by the same functions in mercator scaled to this zoom's pixels and
+   * left unturned: the same shapes, without projecting every point to the
+   * screen and back.
+   */
+  private emitFlat(buffer: PrimBuffer, item: SceneItem, frame: ReferenceFrame, wrap: number): void {
+    const { feature, geometry, style } = item;
+    const h = frame.camera.h;
+    const scale = Math.hypot(h[0]!, h[3]!);
+    const origin = frame.view.origin;
+    const toPx = (p: Pt): Pt => ({ x: (p.x + wrap - origin.x) * scale, y: (p.y - origin.y) * scale });
+    const fromPx = (p: Pt): Pt => ({ x: p.x / scale + origin.x, y: p.y / scale + origin.y });
+    const context = this.emitContext((p) => ({ x: (p.x - origin.x) * scale, y: (p.y - origin.y) * scale }), this.shift);
+    const strokeWidth = style.stroke?.width ?? 0;
+    if (geometry.kind === "arrow" && feature.kind === "arrow") {
+      const parts = arrowParts(geometry.curve.map(toPx), strokeWidth, feature.head, feature.tapered, style.stroke?.dash ?? []);
+      emitView(buffer, item, { kind: "arrow", ...parts, text: null, box: emptyBox() }, fromPx, context);
+      return;
+    }
+    if (geometry.kind === "frontline" && feature.kind === "frontline") {
+      const reach = frame.reach;
+      if (!reach) return;
+      const corners = [toPx({ x: reach.minX - wrap, y: reach.minY }), toPx({ x: reach.maxX - wrap, y: reach.maxY })];
+      const window = {
+        minX: Math.min(corners[0]!.x, corners[1]!.x) - feature.toothSize,
+        minY: Math.min(corners[0]!.y, corners[1]!.y) - feature.toothSize,
+        maxX: Math.max(corners[0]!.x, corners[1]!.x) + feature.toothSize,
+        maxY: Math.max(corners[0]!.y, corners[1]!.y) + feature.toothSize,
+      };
+      const points = geometry.path.map(toPx);
+      const teeth = teethAlong(points, { spacing: feature.toothSpacing, size: feature.toothSize, side: feature.facing === "left" ? 1 : -1, shape: feature.toothShape }, window);
+      emitView(buffer, item, { kind: "frontline", points, teeth, text: null, box: emptyBox() }, fromPx, context);
+    }
   }
 
   private noteKey(shape: Extract<ScreenShape, { kind: "annotation" }>): string {
@@ -716,6 +846,11 @@ export class FeatureRenderer {
   /** Runs the reader's note rules and label placement for this view, and rebuilds what moved. */
   private placeText(frame: ReferenceFrame, shift: Pt): void {
     const { view } = frame;
+    /* Without furniture or the reader's frame rules nothing here depends on the pan, only on what the key names. */
+    const fixedToScreen = this.obstacles.length > 0 || this.narrow !== null;
+    const inputs = `${frame.id}|${this.labelKeyFor(view)}|${this.restEpoch}|${this.structure}|${this.visibleVersion}|${this.images.pixelRatio}`;
+    if (!fixedToScreen && inputs === this.placedInputs) return;
+    this.placedInputs = inputs;
     const drawn: Drawn[] = [];
     const entries: LabelEntry[] = [];
     for (const draw of this.sequence) {
@@ -762,7 +897,7 @@ export class FeatureRenderer {
       if (!shape.text) continue;
       buffer.slot = draw.slot;
       buffer.wrapRef = (draw.item.box.minX + draw.item.box.maxX) / 2 + worldWrap(draw.item, view);
-      buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, context));
+      buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, draw.item.feature.id, context));
     }
   }
 

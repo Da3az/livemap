@@ -42,6 +42,13 @@ export const SEG_START_BUTT = 4;
 export const SEG_END_BUTT = 8;
 export const SEG_ROUND_DASH = 16;
 
+let changes = 0;
+
+/** Bumped whenever any buffer changes, so an unchanged frame can skip looking for changes. */
+export function bufferChanges(): number {
+  return changes;
+}
+
 /** Premultiplied RGBA8, as one little-endian word. */
 export function packColor(rgba: readonly [number, number, number, number]): number {
   const [r, g, b, a] = rgba;
@@ -86,6 +93,7 @@ export class PrimBuffer {
     this.gx = origin.x;
     this.gy = origin.y;
     this.version++;
+    changes++;
   }
 
   private grow(): number {
@@ -100,6 +108,8 @@ export class PrimBuffer {
     }
     const index = this.count++;
     this.f32.fill(0, index * WORDS, index * WORDS + WORDS);
+    this.version++;
+    changes++;
     return index;
   }
 
@@ -210,6 +220,7 @@ export class PrimBuffer {
       }
     }
     this.version++;
+    changes++;
   }
 
   /** Changes the visibility slot of every instance (the item moved in the draw list). */
@@ -222,6 +233,7 @@ export class PrimBuffer {
       u32[o] = ((u32[o]! & 255) | (slot << 8)) >>> 0;
     }
     this.version++;
+    changes++;
   }
 
   bytes(): Uint8Array {

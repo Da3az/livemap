@@ -74,7 +74,31 @@ void main() {
     if (!toDevice(project(i_ab.xy), p0) || !toDevice(project(i_ab.zw), p1) || !toDevice(project(i_extra.xy), p2)) return;
     v_a = vec4(p0, p1);
     v_b = vec4(p2, i_params.x, i_params.y);
-    gl_Position = clip(corner == 0 ? p0 : corner == 1 ? p1 : p2);
+    vec2 at = corner == 0 ? p0 : corner == 1 ? p1 : p2;
+    if (int(i_params.y) == 7) {
+      /*
+       * Every edge is on the outline: grow the triangle by one and a half
+       * pixels so it carries its own anti-aliased edge (the fragment shader
+       * ramps coverage across each edge), instead of three fringes.
+       */
+      vec2 q[3] = vec2[3](p0, p1, p2);
+      int k = corner == 3 ? 2 : corner;
+      vec2 v = q[k];
+      vec2 prev = q[(k + 2) % 3];
+      vec2 next = q[(k + 1) % 3];
+      vec2 centre = (p0 + p1 + p2) / 3.0;
+      vec2 e1 = normalize(v - prev + vec2(1e-9));
+      vec2 e2 = normalize(next - v + vec2(1e-9));
+      vec2 n1 = vec2(-e1.y, e1.x);
+      vec2 n2 = vec2(-e2.y, e2.x);
+      if (dot(n1, centre - v) > 0.0) n1 = -n1;
+      if (dot(n2, centre - v) > 0.0) n2 = -n2;
+      float denominator = max(1.0 + dot(n1, n2), 0.05);
+      vec2 offset = (n1 + n2) / denominator * 1.5;
+      float reach = length(offset);
+      at = v + (reach > 6.0 ? offset * (6.0 / reach) : offset);
+    }
+    gl_Position = clip(at);
     return;
   }
 
@@ -286,7 +310,8 @@ void main() {
   } else if (v_type == 5) {
     vec2 device = vec2(gl_FragCoord.x, u_viewport.y - gl_FragCoord.y);
     ivec2 texel = v_tex.xy + ivec2(floor(device - v_b.xy));
-    o_color = texelFetch(u_atlas, ivec3(texel, v_tex.z), 0);
+    vec4 straight = texelFetch(u_atlas, ivec3(texel, v_tex.z), 0);
+    o_color = vec4(straight.rgb * straight.a, straight.a);
     return;
   }
   if (coverage <= 0.0) discard;

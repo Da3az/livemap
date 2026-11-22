@@ -72,7 +72,7 @@ function headAt(tip: Pt, dir: Pt, length: number): Pt[] {
   return [tip, { x: base.x - dir.y * half, y: base.y + dir.x * half }, { x: base.x + dir.y * half, y: base.y - dir.x * half }];
 }
 
-function arrowParts(curve: Pt[], width: number, head: "none" | "single" | "double", tapered: boolean, dash: readonly number[]) {
+export function arrowParts(curve: Pt[], width: number, head: "none" | "single" | "double", tapered: boolean, dash: readonly number[]) {
   const heads: Pt[][] = [];
   let shaft = curve;
   const total = polylineLength(curve);
@@ -154,7 +154,7 @@ function tooth(at: Pt, dir: Pt, side: 1 | -1, size: number, shape: "triangle" | 
  * produced: zoomed far in, a front line can be hundreds of thousands of
  * pixels long.
  */
-function teethAlong(
+export function teethAlong(
   points: readonly Pt[],
   options: { spacing: number; size: number; side: 1 | -1; shape: "triangle" | "semicircle" },
   viewport: Box,

@@ -26,8 +26,11 @@ export interface EmitContext {
   dashes: DashRegistry;
   /** Mercator → CSS pixels for the view being built, for dash phases. Null behind the eye. */
   project: (p: Pt) => Pt | null;
-  /** Where text anchored at a point of the shapes' screen coordinates falls within its device pixel. */
-  textPhase: (screen: Pt) => Pt;
+  /**
+   * The sub-pixel phase to rasterise a feature's text at, for text anchored at
+   * a point of the shapes' screen coordinates.
+   */
+  textPhase: (screen: Pt, id: string) => Pt;
 }
 
 /** Segments never span more than this in mercator, so every vertex near the view is near the GPU's origin. */
@@ -39,8 +42,15 @@ const PATTERN_LAYER: Record<Exclude<FillPattern, "none">, number> = { hatch: 1, 
 
 type Rgba4 = [number, number, number, number];
 
+const parsed = new Map<string, { r: number; g: number; b: number; a: number }>();
+
 function rgba(css: string, opacity = 1): Rgba4 {
-  const color = parseColor(css) ?? { r: 128, g: 128, b: 128, a: 1 };
+  let color = parsed.get(css);
+  if (!color) {
+    color = parseColor(css) ?? { r: 128, g: 128, b: 128, a: 1 };
+    if (parsed.size > 4096) parsed.clear();
+    parsed.set(css, color);
+  }
   return [color.r, color.g, color.b, color.a * opacity];
 }
 
@@ -201,8 +211,12 @@ function solid(buffer: PrimBuffer, polygons: readonly (readonly Pt[])[], strokeS
         buffer.triangle(polygon[0]!, polygon[index]!, polygon[index + 1]!, color, 0, (index === 1 ? 1 : 0) | 2 | (index === n - 2 ? 4 : 0));
       }
     }
-    /* The fill's own anti-aliased edge, over the casing where there is one, as the 2D canvas filled it. */
-    fringeRing(buffer, polygon, true, color, 0);
+    /*
+     * The fill's own anti-aliased edge, over the casing where there is one,
+     * as the 2D canvas filled it. A lone triangle (a head, a tooth) carries
+     * its edge itself; see the triangle branch of the vertex shader.
+     */
+    if (n !== 3) fringeRing(buffer, polygon, true, color, 0);
   }
 }
 
@@ -220,7 +234,9 @@ function cased(buffer: PrimBuffer, points: readonly Pt[], closed: boolean, s: Re
 /** True when what the feature draws depends on the zoom or turn: dash phases, arrow heads, teeth, leaders. */
 export function isViewDependent(item: SceneItem): boolean {
   const { feature, style } = item;
-  if (feature.kind === "arrow" || feature.kind === "frontline" || feature.kind === "annotation") return true;
+  if (feature.kind === "arrow" || feature.kind === "annotation") return true;
+  /* A front line's teeth always depend on the view; its stroke only when dashed. */
+  if (feature.kind === "frontline") return true;
   return (style.stroke?.dash.length ?? 0) > 0 && feature.kind !== "point";
 }
 
@@ -254,8 +270,8 @@ function marker(buffer: PrimBuffer, item: SceneItem, centre: Pt, radius: number,
   buffer.image(centre, context.images.markerSymbol(feature.symbol, radius, style.marker.ink).id);
 }
 
-export function textImage(block: TextBlock, screen: Pt, context: EmitContext): number {
-  return context.images.text(block, textColors(context.palette), context.textPhase(screen)).id;
+export function textImage(block: TextBlock, screen: Pt, id: string, context: EmitContext): number {
+  return context.images.text(block, textColors(context.palette), context.textPhase(screen, id)).id;
 }
 
 /**
@@ -270,6 +286,10 @@ export function emitStatic(buffer: PrimBuffer, item: SceneItem, context: EmitCon
     return;
   }
   if (geometry.kind === "line" && style.stroke && style.stroke.dash.length === 0) {
+    cased(buffer, geometry.path, false, style.stroke, { casing: true }, context);
+    return;
+  }
+  if (geometry.kind === "frontline" && style.stroke && style.stroke.dash.length === 0) {
     cased(buffer, geometry.path, false, style.stroke, { casing: true }, context);
     return;
   }
@@ -299,7 +319,8 @@ export function emitView(buffer: PrimBuffer, item: SceneItem, shape: ScreenShape
     return;
   }
   if (shape.kind === "frontline" && style.stroke) {
-    cased(buffer, merc(shape.points), false, style.stroke, { casing: true }, context);
+    /* A solid stroke is in the static part (see `emitStatic`); a dashed one needs this view's phase. */
+    if (style.stroke.dash.length > 0) cased(buffer, merc(shape.points), false, style.stroke, { casing: true }, context);
     if (shape.teeth.length > 0) solid(buffer, shape.teeth.map(merc), style.stroke, context);
     return;
   }
@@ -319,7 +340,7 @@ function annotation(buffer: PrimBuffer, item: SceneItem, shape: Extract<ScreenSh
     buffer.disc(anchor, ANCHOR_DOT_RADIUS + 1.25, packColor(halo));
     buffer.disc(anchor, ANCHOR_DOT_RADIUS, packColor(ink));
   }
-  if (shape.text) buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, context));
+  if (shape.text) buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, item.feature.id, context));
 }
 
 /** Every part of a feature from one screen shape: the shape being drawn, which changes on every pointer move. */
@@ -334,8 +355,11 @@ export function emitWhole(buffer: PrimBuffer, item: SceneItem, shape: ScreenShap
     if (style.stroke) cased(buffer, merc(shape.points), false, style.stroke, { casing: true }, context);
   } else if (shape.kind === "point") {
     if (feature.kind === "point") marker(buffer, item, toMerc(shape.centre), shape.radius, context);
+  } else if (shape.kind === "frontline") {
+    if (style.stroke && style.stroke.dash.length === 0) cased(buffer, merc(shape.points), false, style.stroke, { casing: true }, context);
+    emitView(buffer, item, shape, toMerc, context);
   } else {
     emitView(buffer, item, shape, toMerc, context);
   }
-  if (shape.kind !== "annotation" && shape.text && !shape.labelHidden) buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, context));
+  if (shape.kind !== "annotation" && shape.text && !shape.labelHidden) buffer.image(toMerc(shape.text.centre), textImage(shape.text.block, shape.text.centre, item.feature.id, context));
 }

@@ -122,8 +122,8 @@ export function* segments(points: readonly Pt[]): Generator<[Pt, Pt]> {
 
 export function distanceToPolyline(p: Pt, points: readonly Pt[]): number {
   let best = Infinity;
-  for (const [a, b] of segments(points)) {
-    const d = distance(p, closestOnSegment(p, a, b));
+  for (let index = 1; index < points.length; index++) {
+    const d = distance(p, closestOnSegment(p, points[index - 1]!, points[index]!));
     if (d < best) best = d;
   }
   if (best === Infinity) {
@@ -135,7 +135,11 @@ export function distanceToPolyline(p: Pt, points: readonly Pt[]): number {
 
 export function polylineLength(points: readonly Pt[]): number {
   let total = 0;
-  for (const [a, b] of segments(points)) total += distance(a, b);
+  for (let index = 1; index < points.length; index++) {
+    const a = points[index - 1]!;
+    const b = points[index]!;
+    total += Math.hypot(a.x - b.x, a.y - b.y);
+  }
   return total;
 }
 
@@ -192,7 +196,9 @@ export function polylineTouchesBox(points: readonly Pt[], box: Box): boolean {
 export function alongPolyline(points: readonly Pt[], target: number): { at: Pt; dir: Pt } | null {
   let travelled = 0;
   let last: { at: Pt; dir: Pt } | null = null;
-  for (const [a, b] of segments(points)) {
+  for (let index = 1; index < points.length; index++) {
+    const a = points[index - 1]!;
+    const b = points[index]!;
     const length = distance(a, b);
     if (length === 0) continue;
     const dir = { x: (b.x - a.x) / length, y: (b.y - a.y) / length };
