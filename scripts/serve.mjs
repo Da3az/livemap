@@ -2,7 +2,7 @@
 // Production entrypoint. Wires the real implementations from the environment
 // and refuses to start on a misconfiguration rather than degrading quietly.
 //
-//   node --import tsx scripts/serve.mjs
+//   node --conditions=livemap-source --import tsx scripts/serve.mjs
 
 import {
   buildServer,

@@ -165,7 +165,6 @@ export function makeSettings(input: SettingsInput): MapSettings {
       order: groupKeys[i] ?? "V",
       hidden: false,
       locked: false,
-      collapsed: false,
     })),
     legend: {
       show: input.showLegend ?? true,

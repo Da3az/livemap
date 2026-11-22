@@ -29,6 +29,7 @@ export type Capability =
   | "map:read"
   | "map:create"
   | "map:edit"
+  | "map:archive"
   | "map:delete"
   | "map:publish"
   | "publish:request"
@@ -43,6 +44,7 @@ const GRID: Record<Role, readonly Capability[]> = {
     "map:read",
     "map:create",
     "map:edit",
+    "map:archive",
     "map:delete",
     "map:publish",
     "publish:request",
@@ -56,6 +58,7 @@ const GRID: Record<Role, readonly Capability[]> = {
     "map:read",
     "map:create",
     "map:edit",
+    "map:archive",
     "map:delete",
     "map:publish",
     "publish:request",
@@ -140,10 +143,10 @@ export function authorizeMapEdit(
   map: MapOwnership,
 ): Decision {
   if (!can(actor.role, "map:edit")) {
-    return deny(`role "${actor.role}" cannot edit maps`);
+    return deny("Your role in this workspace does not allow editing maps.");
   }
   if (isRole(actor.role) && OWNS_ROWS.has(actor.role) && map.createdBy !== actor.userId) {
-    return deny(`role "${actor.role}" may edit only maps it created`);
+    return deny("A contributor can edit only the maps they created. This one was made by someone else.");
   }
   return ALLOW;
 }
@@ -153,8 +156,8 @@ export function authorizePublish(actor: { readonly role: string }): Decision {
     // Phrased as a next step: a contributor is not blocked, only routed.
     return deny(
       can(actor.role, "publish:request")
-        ? `role "${actor.role}" cannot publish; submit for review instead`
-        : `role "${actor.role}" cannot publish`,
+        ? "A contributor cannot publish. Ask an editor, an admin or the owner to publish this map."
+        : "Your role in this workspace does not allow publishing.",
     );
   }
   return ALLOW;

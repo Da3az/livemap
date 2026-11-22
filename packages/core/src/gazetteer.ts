@@ -1,12 +1,13 @@
 /**
- * A built-in list of places for the mock place search: the Middle East and
- * North Africa in depth, and capitals and large cities elsewhere. A real
- * deployment replaces this with a geocoder; see INTEGRATION.md.
+ * A built-in list of places: the Middle East and North Africa in depth, and
+ * capitals and large cities elsewhere. The API answers place search from it
+ * until a geocoder is chosen (packages/api/src/places.ts), and the front
+ * end's mock uses the same list.
  *
  * Rows are [English name, Arabic name, country in English, country in
  * Arabic, latitude, longitude, other spellings].
  */
-import type { LngLat, PlaceResult } from "@/model/types";
+import type { LngLat, PlaceResult } from "./model.js";
 
 type Row = [en: string, ar: string, countryEn: string, countryAr: string, lat: number, lng: number, also?: string];
 

@@ -93,11 +93,11 @@ jobs:
 
       - run: npm ci
       - run: node scripts/migrate.mjs up
-      - run: node --import tsx bench/seed.mjs 100
+      - run: node --conditions=livemap-source --import tsx bench/seed.mjs 100
 
       - name: Start bench server
         run: |
-          node --import tsx bench/server.mjs > /tmp/bench.log 2>&1 &
+          node --conditions=livemap-source --import tsx bench/server.mjs > /tmp/bench.log 2>&1 &
           for _ in $(seq 1 40); do
             curl -fsS http://127.0.0.1:8801/health && break
             sleep 1

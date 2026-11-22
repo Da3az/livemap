@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyRequest } from "fastify";
-import type { Actor, AuthResolver } from "./server.js";
+import { isGuestSlug } from "./limits.js";
+import type { AuthResolver, AuthResult } from "./server.js";
 
 export interface SessionClaims {
   readonly userId: string;
@@ -25,7 +26,9 @@ export function signSession(claims: SessionClaims, secret: string): string {
 
 export type VerifyResult =
   | { ok: true; claims: SessionClaims }
-  | { ok: false; reason: "malformed" | "bad_signature" | "expired" };
+  | { ok: false; reason: "malformed" | "bad_signature" }
+  /** The signature is good and the token has run out; the claims say whose it was. */
+  | { ok: false; reason: "expired"; claims: SessionClaims };
 
 export function verifySession(
   token: string,
@@ -63,7 +66,7 @@ export function verifySession(
   ) {
     return { ok: false, reason: "malformed" };
   }
-  if (claims.exp <= nowSecs) return { ok: false, reason: "expired" };
+  if (claims.exp <= nowSecs) return { ok: false, reason: "expired", claims };
 
   return { ok: true, claims };
 }
@@ -86,12 +89,21 @@ export class TokenAuth implements AuthResolver {
     }
   }
 
-  async resolve(req: FastifyRequest): Promise<Actor | null> {
+  async resolve(req: FastifyRequest): Promise<AuthResult> {
     const header = req.headers.authorization;
     if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
 
     const out = verifySession(header.slice(7).trim(), this.secret);
-    if (!out.ok) return null;
+    if (!out.ok) {
+      // Only a genuine token that ran out earns an explanation; a forged or
+      // garbled one learns nothing.
+      if (out.reason !== "expired") return null;
+      return {
+        refused: isGuestSlug(out.claims.tenantSlug)
+          ? "This guest workspace has expired, and its maps were removed with it. Start a new one to keep working."
+          : "Your session has expired. Sign in again with a new token.",
+      };
+    }
 
     return {
       userId: out.claims.userId,

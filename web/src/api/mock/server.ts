@@ -19,7 +19,7 @@ import type {
   VersionRecord,
 } from "@/model/types";
 import { apiError } from "./errors";
-import { searchGazetteer } from "./gazetteer";
+import { searchGazetteer } from "@livemap/core";
 import {
   buildArtifact,
   contentHash,
@@ -124,7 +124,7 @@ export const server: Sync<ApiClient> = {
 
   listTemplates(): TemplateSummary[] {
     requireSession();
-    return TEMPLATES;
+    return [...TEMPLATES];
   },
 
   listMaps(input): MapSummary[] {

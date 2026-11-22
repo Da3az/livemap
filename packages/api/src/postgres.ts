@@ -1,36 +1,34 @@
 import pg from "pg";
-import type {
-  ArrowHead,
-  FacingSide,
-  FillStyle,
-  HexColor,
-  LabelStyle,
-  LeaderStyle,
-  LngLat,
-  MapDoc,
-  MapFeature,
-  RichText,
-  Ring,
-  StrokeStyle,
-  TextDir,
+import {
+  applySettingsPatch,
+  type LngLat,
+  type MapDoc,
+  type MapFeature,
+  type MapSettings,
+  type MapSummary,
 } from "@livemap/core";
-import { authorizeMapEdit } from "./authz.js";
-import { featureQuotaReason, freeSlug, slugify } from "./repo.js";
-import type {
-  ArchiveOutcome,
-  CreateLimits,
-  CreateOutcome,
-  EditLimits,
-  EditOutcome,
-  MapDraft,
-  MapPatch,
-  MapRepo,
-  MapSummary,
-  PublishSnapshot,
-  RepoCtx,
-  UpdateOutcome,
-  VersionDraft,
-  VersionRecord,
+import { authorizeMapEdit, can } from "./authz.js";
+import {
+  ARCHIVED_REASON,
+  FORMER_MEMBER,
+  featureQuotaReason,
+  freeSlug,
+  mapQuotaReason,
+  referenceProblem,
+  slugify,
+  type ArchiveOutcome,
+  type CreateLimits,
+  type CreateOutcome,
+  type EditInput,
+  type EditLimits,
+  type EditOutcome,
+  type MapRepo,
+  type NewMap,
+  type PublishSnapshot,
+  type RepoCtx,
+  type SessionInfo,
+  type VersionDraft,
+  type VersionRow,
 } from "./repo.js";
 
 /**
@@ -39,10 +37,12 @@ import type {
  * leave as an exception; the caller turns it back into an outcome.
  */
 class Refused extends Error {
-  constructor(readonly reason: string) {
-    super(reason);
+  constructor(readonly outcome: Extract<EditOutcome, { status: "quota" | "invalid" }>) {
+    super(outcome.reason);
   }
 }
+
+class QuotaRefused extends Error {}
 
 /**
  * Map ids are uuids here, and one that is not can only miss. Asked anyway,
@@ -56,6 +56,8 @@ const isUuid = (v: string): boolean => UUID_RE.test(v);
 
 /** Postgres `unique_violation`. */
 const UNIQUE_VIOLATION = "23505";
+/** Postgres `insufficient_privilege`, raised by the archive trigger in 0004. */
+const INSUFFICIENT_PRIVILEGE = "42501";
 
 type GeoJson =
   | { type: "Point"; coordinates: number[] }
@@ -63,238 +65,116 @@ type GeoJson =
   | { type: "Polygon"; coordinates: number[][][] };
 
 /**
- * Shape of the `props` jsonb column. Asserted rather than validated: this is a
- * trust boundary with our own database, not with a client. Anything that got
- * in came through `encodeFeature`.
+ * Columns hold what the server acts on (draw order, group and preset
+ * references, the publish strip, validity dates, lineage); `geom` holds the
+ * geography, for spatial queries; `props` holds the rest of the feature as the
+ * model defines it. Who changed it and when are columns, stamped by the server.
  */
-interface StoredProps {
-  label?: RichText;
-  labelStyle?: LabelStyle;
-  meta?: Record<string, string>;
-  fill?: FillStyle;
-  stroke?: StrokeStyle;
-  curvature?: number;
-  head?: ArrowHead;
-  chevrons?: boolean;
-  facing?: FacingSide;
-  toothSpacing?: number;
-  toothSize?: number;
-  icon?: string;
-  iconColor?: HexColor;
-  iconSize?: number;
-  disc?: { readonly fill: HexColor; readonly ring: HexColor };
-  offset?: readonly [number, number];
-  text?: RichText;
-  leader?: LeaderStyle | null;
-}
+const COLUMN_FIELDS = new Set([
+  "id",
+  "kind",
+  "order",
+  "groupId",
+  "presetId",
+  "lineageId",
+  "hidden",
+  "locked",
+  "validFrom",
+  "validTo",
+  "updatedAt",
+  "updatedBy",
+]);
 
-/**
- * Splits a feature into the spatial column and the JSON payload. The geometry
- * is a real PostGIS column because it is the part we query spatially; the
- * open-ended per-feature style stays in jsonb.
- *
- * For an arrow the stored geometry is the CONTROL POINTS, not the rendered
- * curve — the curve is derived at render time.
- */
-function encodeFeature(f: MapFeature): {
-  kind: string;
-  at: string;
-  geom: GeoJson | null;
-  props: Record<string, unknown>;
-} {
-  const common = {
-    ...(f.label ? { label: f.label } : {}),
-    ...(f.labelStyle ? { labelStyle: f.labelStyle } : {}),
-    ...(f.meta ? { meta: f.meta } : {}),
-  };
+/** The model field that carries each kind's geometry. */
+const GEOMETRY_FIELD: Record<MapFeature["kind"], string> = {
+  area: "rings",
+  line: "path",
+  arrow: "control",
+  frontline: "path",
+  point: "at",
+  annotation: "anchor",
+};
 
-  switch (f.kind) {
+function geometryOf(feature: MapFeature): GeoJson {
+  switch (feature.kind) {
     case "area":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: {
-          type: "Polygon",
-          coordinates: f.rings.map((r) => r.map((p) => [p[0], p[1]])),
-        },
-        props: { ...common, fill: f.fill, stroke: f.stroke },
-      };
+      return { type: "Polygon", coordinates: feature.rings };
     case "line":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: {
-          type: "LineString",
-          coordinates: f.path.map((p) => [p[0], p[1]]),
-        },
-        props: { ...common, stroke: f.stroke },
-      };
-    case "arrow":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: {
-          type: "LineString",
-          coordinates: f.control.map((p) => [p[0], p[1]]),
-        },
-        props: {
-          ...common,
-          curvature: f.curvature,
-          head: f.head,
-          stroke: f.stroke,
-          chevrons: f.chevrons,
-        },
-      };
     case "frontline":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: {
-          type: "LineString",
-          coordinates: f.path.map((p) => [p[0], p[1]]),
-        },
-        props: {
-          ...common,
-          facing: f.facing,
-          stroke: f.stroke,
-          toothSpacing: f.toothSpacing,
-          toothSize: f.toothSize,
-        },
-      };
+      return { type: "LineString", coordinates: feature.path };
+    case "arrow":
+      return { type: "LineString", coordinates: feature.control };
     case "point":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: { type: "Point", coordinates: [f.at_[0], f.at_[1]] },
-        props: {
-          ...common,
-          icon: f.icon,
-          iconColor: f.iconColor,
-          iconSize: f.iconSize,
-          ...(f.disc ? { disc: f.disc } : {}),
-        },
-      };
+      return { type: "Point", coordinates: feature.at };
     case "annotation":
-      return {
-        kind: f.kind,
-        at: f.at,
-        geom: { type: "Point", coordinates: [f.anchor[0], f.anchor[1]] },
-        props: {
-          ...common,
-          offset: f.offset,
-          text: f.text,
-          labelStyle: f.labelStyle,
-          leader: f.leader,
-        },
-      };
+      return { type: "Point", coordinates: feature.anchor };
   }
 }
 
-const asLngLat = (c: number[]): LngLat => [c[0]!, c[1]!];
-
-function decodeFeature(row: {
-  id: string;
-  kind: string;
-  at: string;
-  geom: string | null;
-  props: Record<string, unknown>;
-}): MapFeature {
-  const g: GeoJson | null = row.geom ? JSON.parse(row.geom) : null;
-  const p = row.props as StoredProps;
-  const base = { id: row.id, at: row.at };
-  const common = {
-    ...(p.label ? { label: p.label } : {}),
-    ...(p.labelStyle ? { labelStyle: p.labelStyle } : {}),
-    ...(p.meta ? { meta: p.meta } : {}),
-  };
-  const line = () =>
-    g?.type === "LineString" ? g.coordinates.map(asLngLat) : [];
-  const point = (): LngLat =>
-    g?.type === "Point" ? asLngLat(g.coordinates) : [0, 0];
-
-  switch (row.kind) {
-    case "area": {
-      const rings: Ring[] =
-        g?.type === "Polygon" ? g.coordinates.map((r) => r.map(asLngLat)) : [];
-      return {
-        ...base,
-        ...common,
-        kind: "area",
-        rings,
-        fill: p.fill!,
-        stroke: p.stroke!,
-      };
-    }
-    case "line":
-      return {
-        ...base,
-        ...common,
-        kind: "line",
-        path: line(),
-        stroke: p.stroke!,
-      };
-    case "arrow":
-      return {
-        ...base,
-        ...common,
-        kind: "arrow",
-        control: line(),
-        curvature: p.curvature!,
-        head: p.head!,
-        stroke: p.stroke!,
-        chevrons: p.chevrons!,
-      };
-    case "frontline":
-      return {
-        ...base,
-        ...common,
-        kind: "frontline",
-        path: line(),
-        facing: p.facing!,
-        stroke: p.stroke!,
-        toothSpacing: p.toothSpacing!,
-        toothSize: p.toothSize!,
-      };
-    case "point":
-      return {
-        ...base,
-        ...common,
-        kind: "point",
-        at_: point(),
-        icon: p.icon!,
-        iconColor: p.iconColor!,
-        iconSize: p.iconSize!,
-        ...(p.disc ? { disc: p.disc } : {}),
-      };
-    case "annotation":
-      return {
-        ...base,
-        ...common,
-        kind: "annotation",
-        anchor: point(),
-        offset: p.offset!,
-        text: p.text!,
-        labelStyle: p.labelStyle!,
-        leader: p.leader ?? null,
-      };
-    default:
-      throw new Error(`unknown feature kind: ${row.kind}`);
+function encodeFeature(feature: MapFeature): { geom: GeoJson; props: Record<string, unknown> } {
+  const props: Record<string, unknown> = {};
+  const geometryField = GEOMETRY_FIELD[feature.kind];
+  for (const [key, value] of Object.entries(feature)) {
+    if (COLUMN_FIELDS.has(key) || key === geometryField || value === undefined) continue;
+    props[key] = value;
   }
+  return { geom: geometryOf(feature), props };
+}
+
+const asLngLat = (c: number[]): LngLat => [c[0] ?? 0, c[1] ?? 0];
+
+function decodeGeometry(kind: MapFeature["kind"], g: GeoJson | null): Record<string, unknown> {
+  const field = GEOMETRY_FIELD[kind];
+  if (!g) return { [field]: kind === "area" ? [] : kind === "point" || kind === "annotation" ? [0, 0] : [] };
+  if (g.type === "Polygon") return { [field]: g.coordinates.map((ring) => ring.map(asLngLat)) };
+  if (g.type === "LineString") return { [field]: g.coordinates.map(asLngLat) };
+  return { [field]: asLngLat(g.coordinates) };
+}
+
+const FEATURE_SELECT = `
+  select f.id, f.kind, f.order_key, ST_AsGeoJSON(f.geom, 15) as geom, f.props,
+         f.group_id, f.preset_id, f.lineage_id, f.hidden, f.locked,
+         f.valid_from, f.valid_to, f.updated_at, u.name as updated_by_name
+    from features f
+    left join users u on u.id = f.updated_by
+   where f.map_id = $1
+   order by f.order_key, f.id`;
+
+const iso = (value: unknown): string | null => (value === null || value === undefined ? null : new Date(value as string).toISOString());
+
+function decodeFeature(r: Record<string, any>): MapFeature {
+  const kind = r.kind as MapFeature["kind"];
+  return {
+    ...(r.props as Record<string, unknown>),
+    ...decodeGeometry(kind, r.geom ? (JSON.parse(r.geom) as GeoJson) : null),
+    id: r.id,
+    kind,
+    order: r.order_key,
+    groupId: r.group_id,
+    presetId: r.preset_id,
+    lineageId: r.lineage_id,
+    hidden: r.hidden,
+    locked: r.locked,
+    validFrom: iso(r.valid_from),
+    validTo: iso(r.valid_to),
+    updatedAt: iso(r.updated_at)!,
+    updatedBy: r.updated_by_name ?? FORMER_MEMBER,
+  } as MapFeature;
 }
 
 /**
- * One statement, two callers. `created_by` is selected but deliberately not
- * part of the returned MapDoc: the doc is embedded verbatim in every published
- * artifact, and those are public, so an author's user id must not ride along.
- * `loadForPublish` returns it as a separate field instead.
+ * Names come from a left join on `users`, whose policy shows only people with a
+ * membership in this tenant; someone removed since comes back without a name.
  */
 const MAP_SELECT = `
-  select id, tenant_id, slug, title, title_dir, ui_dir,
-         ST_X(center::geometry) as lng, ST_Y(center::geometry) as lat,
-         zoom, bearing, pitch, basemap_style_id, label_langs,
-         rev, published_version, updated_at, created_by
-    from maps
-   where id = $1 and archived_at is null`;
+  select m.id, m.tenant_id, m.slug, m.title, m.title_dir, m.ui_dir, m.settings,
+         m.rev, m.published_version, m.published_rev, m.archived_at,
+         m.updated_at, m.created_by,
+         uu.name as updated_by_name, cu.name as created_by_name
+    from maps m
+    left join users uu on uu.id = m.updated_by
+    left join users cu on cu.id = m.created_by
+   where m.id = $1`;
 
 function decodeMap(r: Record<string, any>): MapDoc {
   return {
@@ -302,33 +182,26 @@ function decodeMap(r: Record<string, any>): MapDoc {
     tenantId: r.tenant_id,
     slug: r.slug,
     title: { value: r.title, dir: r.title_dir },
-    viewport: {
-      center: [Number(r.lng), Number(r.lat)],
-      zoom: Number(r.zoom),
-      bearing: Number(r.bearing),
-      pitch: Number(r.pitch),
-    },
-    basemap: { styleId: r.basemap_style_id, labelLangs: r.label_langs },
     uiDir: r.ui_dir,
-    updatedAt: new Date(r.updated_at).toISOString(),
+    settings: r.settings as MapSettings,
     rev: Number(r.rev),
-    ...(r.published_version === null
-      ? {}
-      : { publishedVersion: Number(r.published_version) }),
-  } as MapDoc;
+    publishedVersion: r.published_version === null ? null : Number(r.published_version),
+    publishedRev: r.published_rev === null ? null : Number(r.published_rev),
+    archived: r.archived_at !== null,
+    updatedAt: iso(r.updated_at)!,
+    updatedBy: r.updated_by_name ?? FORMER_MEMBER,
+    createdBy: { userId: r.created_by, name: r.created_by_name ?? FORMER_MEMBER },
+  };
 }
 
-const VERSION_COLUMNS = `map_id, version, etag, storage_key, byte_size,
-         feature_count, published_at, published_by`;
+const VERSION_SELECT = `
+  select v.map_id, v.version, v.etag, v.storage_key, v.byte_size, v.feature_count,
+         v.published_at, v.published_by, u.name as published_by_name,
+         v.source_rev, v.origin_type, v.origin_from_version
+    from map_versions v
+    left join users u on u.id = v.published_by`;
 
-const LATEST_VERSION_SELECT = `
-  select ${VERSION_COLUMNS}
-    from map_versions
-   where map_id = $1
-   order by version desc
-   limit 1`;
-
-function decodeVersion(r: Record<string, any>): VersionRecord {
+function decodeVersion(r: Record<string, any>): VersionRow {
   return {
     mapId: r.map_id,
     version: Number(r.version),
@@ -336,8 +209,13 @@ function decodeVersion(r: Record<string, any>): VersionRecord {
     storageKey: r.storage_key,
     byteSize: Number(r.byte_size),
     featureCount: Number(r.feature_count),
-    publishedAt: new Date(r.published_at).toISOString(),
-    publishedBy: r.published_by,
+    publishedAt: iso(r.published_at)!,
+    publishedBy: { userId: r.published_by, name: r.published_by_name ?? FORMER_MEMBER },
+    sourceRev: Number(r.source_rev),
+    origin:
+      r.origin_type === "rollback"
+        ? { type: "rollback", fromVersion: Number(r.origin_from_version) }
+        : { type: "publish", rev: Number(r.source_rev) },
   };
 }
 
@@ -433,151 +311,6 @@ export class PostgresRepo implements MapRepo {
     }
   }
 
-  async getMap(ctx: RepoCtx, mapId: string): Promise<MapDoc | null> {
-    if (!isUuid(mapId)) return null;
-    return this.withCtx(ctx, async (c) => {
-      const { rows } = await c.query(MAP_SELECT, [mapId]);
-      return rows[0] ? decodeMap(rows[0]) : null;
-    });
-  }
-
-  async listFeatures(ctx: RepoCtx, mapId: string): Promise<MapFeature[]> {
-    if (!isUuid(mapId)) return [];
-    return this.withCtx(ctx, async (c) => {
-      // Ordered by the fractional index so the caller never has to sort.
-      const { rows } = await c.query(
-        `select id, kind, at, ST_AsGeoJSON(geom) as geom, props
-           from features
-          where map_id = $1
-          order by at`,
-        [mapId],
-      );
-      return rows.map(decodeFeature);
-    });
-  }
-
-  async applyEdit(
-    ctx: RepoCtx,
-    mapId: string,
-    expectedRev: number,
-    put: readonly MapFeature[],
-    remove: readonly string[],
-    limits?: EditLimits,
-  ): Promise<EditOutcome> {
-    if (!isUuid(mapId)) return { status: "not_found" };
-    try {
-      return await this.applyEditTx(ctx, mapId, expectedRev, put, remove, limits);
-    } catch (err) {
-      if (err instanceof Refused) return { status: "quota", reason: err.reason };
-      throw err;
-    }
-  }
-
-  private applyEditTx(
-    ctx: RepoCtx,
-    mapId: string,
-    expectedRev: number,
-    put: readonly MapFeature[],
-    remove: readonly string[],
-    limits: EditLimits | undefined,
-  ): Promise<EditOutcome> {
-    return this.withCtx(ctx, async (c) => {
-      // Read the map first, so the three ways this can fail stay
-      // distinguishable. A plain select, NOT `for update`: per the Postgres
-      // docs, SELECT ... FOR UPDATE applies the UPDATE policy's USING clause
-      // as well as the SELECT policy's, so a row an ownership policy refuses
-      // would come back empty and get reported as "no such map". The lock is
-      // not needed here anyway — the guarded update below takes it.
-      const head = await c.query(
-        `select rev, created_by from maps where id = $1 and archived_at is null`,
-        [mapId],
-      );
-      if (head.rowCount === 0) return { status: "not_found" } as const;
-
-      // The DB policies are the backstop; this is the copy that can say why.
-      // Without it an ownership refusal would reach the guarded update, match
-      // zero rows, and surface as 409 stale_revision — telling the client to
-      // retry something that can never succeed.
-      const decision = authorizeMapEdit(ctx, {
-        createdBy: head.rows[0]!.created_by,
-      });
-      if (!decision.allowed) {
-        return { status: "forbidden", reason: decision.reason! } as const;
-      }
-
-      // The guard and the bump are one statement. Zero rows means the caller
-      // read a stale rev — a lost write — and the row lock this takes
-      // serialises concurrent writers behind it.
-      const guard = await c.query(
-        `update maps
-            set rev = rev + 1, updated_at = now()
-          where id = $1 and rev = $2 and archived_at is null
-        returning rev`,
-        [mapId, expectedRev],
-      );
-      if (guard.rowCount === 0) return { status: "stale" } as const;
-
-      if (remove.length > 0) {
-        await c.query(
-          `delete from features where map_id = $1 and id = any($2::text[])`,
-          [mapId, [...remove]],
-        );
-      }
-
-      await this.putFeatures(c, ctx, mapId, put);
-
-      // Counted after the write rather than predicted before it: a put may
-      // replace a row or add one, and only the table knows which.
-      if (limits) {
-        const { rows } = await c.query(
-          `select count(*)::int as n from features where map_id = $1`,
-          [mapId],
-        );
-        if (rows[0]!.n > limits.maxFeaturesPerMap) {
-          throw new Refused(featureQuotaReason(limits));
-        }
-      }
-
-      return { status: "applied", rev: Number(guard.rows[0]!.rev) } as const;
-    });
-  }
-
-  /** Upsert, shared by an edit and by a new map's starting features. */
-  private async putFeatures(
-    c: pg.PoolClient,
-    ctx: RepoCtx,
-    mapId: string,
-    put: readonly MapFeature[],
-  ): Promise<void> {
-    for (const f of put) {
-      const e = encodeFeature(f);
-      await c.query(
-        `insert into features
-           (id, map_id, tenant_id, kind, at, geom, props, updated_by, updated_at)
-         values ($1, $2, $3, $4, $5,
-                 case when $6::text is null then null
-                      else ST_GeomFromGeoJSON($6)::geography end,
-                 $7::jsonb, livemap_current_user(), now())
-         on conflict (map_id, id) do update
-            set kind = excluded.kind,
-                at = excluded.at,
-                geom = excluded.geom,
-                props = excluded.props,
-                updated_by = excluded.updated_by,
-                updated_at = now()`,
-        [
-          f.id,
-          mapId,
-          ctx.tenantId,
-          e.kind,
-          e.at,
-          e.geom ? JSON.stringify(e.geom) : null,
-          JSON.stringify(e.props),
-        ],
-      );
-    }
-  }
-
   async membershipRole(ctx: RepoCtx): Promise<string | null> {
     return this.withCtx(ctx, async (c) => {
       // The select policy on memberships is tenant-only, so this needs no role
@@ -592,58 +325,71 @@ export class PostgresRepo implements MapRepo {
     });
   }
 
-  async listMaps(
-    ctx: RepoCtx,
-    opts: { readonly archived: boolean },
-  ): Promise<MapSummary[]> {
+  async sessionInfo(ctx: RepoCtx): Promise<SessionInfo> {
+    return this.withCtx(ctx, async (c) => {
+      const { rows } = await c.query(
+        `select (select name from users where id = livemap_current_user()) as user_name,
+                (select name from tenants where id = livemap_current_tenant()) as tenant_name`,
+      );
+      return { userName: rows[0]?.user_name ?? FORMER_MEMBER, tenantName: rows[0]?.tenant_name ?? "Workspace" };
+    });
+  }
+
+  async listMaps(ctx: RepoCtx, opts: { readonly archived: boolean }): Promise<MapSummary[]> {
     return this.withCtx(ctx, async (c) => {
       const { rows } = await c.query(
         `select m.id, m.slug, m.title, m.title_dir, m.ui_dir, m.rev,
-                m.published_version, m.updated_at,
-                (select count(*)::int from features f where f.map_id = m.id)
-                  as feature_count
+                m.published_version, m.published_rev, m.updated_at, m.created_by,
+                m.archived_at is not null as archived,
+                m.settings->'openingView'->'center' as center,
+                (m.settings->'openingView'->>'zoom')::float8 as zoom,
+                m.settings->'basemap'->>'styleId' as basemap,
+                uu.name as updated_by_name, cu.name as created_by_name,
+                (select count(*)::int from features f where f.map_id = m.id) as feature_count
            from maps m
+           left join users uu on uu.id = m.updated_by
+           left join users cu on cu.id = m.created_by
           where (m.archived_at is not null) = $1
           order by m.updated_at desc`,
         [opts.archived],
       );
-      return rows.map((r) => ({
-        id: r.id,
-        slug: r.slug,
-        title: { value: r.title, dir: r.title_dir },
-        uiDir: r.ui_dir,
-        rev: Number(r.rev),
-        ...(r.published_version === null
-          ? {}
-          : { publishedVersion: Number(r.published_version) }),
-        updatedAt: new Date(r.updated_at).toISOString(),
-        featureCount: Number(r.feature_count),
-        archived: opts.archived,
-      }));
+      return rows.map(
+        (r): MapSummary => ({
+          id: r.id,
+          slug: r.slug,
+          title: { value: r.title, dir: r.title_dir },
+          uiDir: r.ui_dir,
+          rev: Number(r.rev),
+          publishedVersion: r.published_version === null ? null : Number(r.published_version),
+          publishedRev: r.published_rev === null ? null : Number(r.published_rev),
+          updatedAt: iso(r.updated_at)!,
+          updatedBy: r.updated_by_name ?? FORMER_MEMBER,
+          createdBy: { userId: r.created_by, name: r.created_by_name ?? FORMER_MEMBER },
+          featureCount: Number(r.feature_count),
+          archived: r.archived,
+          thumbnail: { center: asLngLat(r.center as number[]), zoom: Number(r.zoom), basemap: r.basemap },
+        }),
+      );
     });
   }
 
   async countMaps(ctx: RepoCtx): Promise<number> {
     return this.withCtx(ctx, async (c) => {
-      const { rows } = await c.query(`select count(*)::int as n from maps`);
+      const { rows } = await c.query(`select count(*)::int as n from maps where archived_at is null`);
       return Number(rows[0]!.n);
     });
   }
 
-  async createMap(
-    ctx: RepoCtx,
-    draft: MapDraft,
-    limits: CreateLimits,
-  ): Promise<CreateOutcome> {
+  async createMap(ctx: RepoCtx, map: NewMap, limits: CreateLimits): Promise<CreateOutcome> {
     // The slug is chosen by reading the ones in use, which two concurrent
     // creates can both do before either inserts. The unique index settles it;
     // the loser's transaction is already aborted by then, so the retry has to
     // be a fresh one rather than a second attempt inside it.
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.createMapTx(ctx, draft, limits);
+        return await this.createMapTx(ctx, map, limits);
       } catch (err) {
-        if (err instanceof Refused) return { status: "quota", reason: err.reason };
+        if (err instanceof QuotaRefused) return { status: "quota", reason: mapQuotaReason(limits) };
         const code = (err as { code?: string }).code;
         if (code === UNIQUE_VIOLATION && attempt < 3) continue;
         throw err;
@@ -651,243 +397,249 @@ export class PostgresRepo implements MapRepo {
     }
   }
 
-  private createMapTx(
-    ctx: RepoCtx,
-    draft: MapDraft,
-    limits: CreateLimits,
-  ): Promise<CreateOutcome> {
+  private createMapTx(ctx: RepoCtx, map: NewMap, limits: CreateLimits): Promise<CreateOutcome> {
     return this.withCtx(ctx, async (c) => {
-      const { rows: existing } = await c.query(`select slug from maps`);
-      if (existing.length >= limits.maxMaps) {
-        throw new Refused(`this workspace is limited to ${limits.maxMaps} maps`);
-      }
+      const { rows: existing } = await c.query(`select slug, archived_at is not null as archived from maps`);
+      if (existing.filter((r) => !r.archived).length >= limits.maxMaps) throw new QuotaRefused();
+      const slug = freeSlug(slugify(map.title.value), new Set(existing.map((r) => r.slug as string)));
 
-      const slug = freeSlug(
-        slugify(draft.title.value),
-        new Set(existing.map((r) => r.slug as string)),
-      );
-
-      // created_by comes from the session, never from the caller: the insert
-      // policy checks the tenant and the role but not the author, and row
-      // ownership for a contributor hangs on this column.
+      // created_by and updated_by come from the session, never from the
+      // caller: row ownership for a contributor hangs on created_by.
       const { rows } = await c.query(
-        `insert into maps
-           (tenant_id, slug, title, title_dir, ui_dir, center, zoom, bearing,
-            pitch, basemap_style_id, label_langs, created_by)
-         values ($1, $2, $3, $4, $5,
-                 ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography,
-                 $8, $9, $10, $11, $12::text[], livemap_current_user())
+        `insert into maps (tenant_id, slug, title, title_dir, ui_dir, settings, created_by, updated_by)
+         values ($1, $2, $3, $4, $5, $6::jsonb, livemap_current_user(), livemap_current_user())
          returning id`,
-        [
-          ctx.tenantId,
-          slug,
-          draft.title.value,
-          draft.title.dir,
-          draft.uiDir,
-          draft.viewport.center[0],
-          draft.viewport.center[1],
-          draft.viewport.zoom,
-          draft.viewport.bearing,
-          draft.viewport.pitch,
-          draft.basemap.styleId,
-          [...draft.basemap.labelLangs],
-        ],
+        [ctx.tenantId, slug, map.title.value, map.title.dir, map.uiDir, JSON.stringify(map.settings)],
       );
-      const mapId = rows[0]!.id as string;
-
-      await this.putFeatures(c, ctx, mapId, draft.features);
-
-      const map = await c.query(MAP_SELECT, [mapId]);
-      return { status: "created", doc: decodeMap(map.rows[0]!) } as const;
+      const created = await c.query(MAP_SELECT, [rows[0]!.id]);
+      return { status: "created", map: decodeMap(created.rows[0]!) } as const;
     });
   }
 
-  async updateMap(
-    ctx: RepoCtx,
-    mapId: string,
-    patch: MapPatch,
-  ): Promise<UpdateOutcome> {
-    if (!isUuid(mapId)) return { status: "not_found" };
+  async getMap(ctx: RepoCtx, mapId: string): Promise<{ map: MapDoc; features: MapFeature[] } | null> {
+    if (!isUuid(mapId)) return null;
     return this.withCtx(ctx, async (c) => {
-      // Plain select first, for the same reason as in `applyEdit`: a locking
-      // read would apply the UPDATE policy and report a refusal as a miss.
+      const map = await c.query(MAP_SELECT, [mapId]);
+      if (map.rowCount === 0) return null;
+      const features = await c.query(FEATURE_SELECT, [mapId]);
+      return { map: decodeMap(map.rows[0]!), features: features.rows.map(decodeFeature) };
+    });
+  }
+
+  async applyEdit(ctx: RepoCtx, mapId: string, edit: EditInput, limits: EditLimits): Promise<EditOutcome> {
+    if (!isUuid(mapId)) return { status: "not_found" };
+    try {
+      return await this.applyEditTx(ctx, mapId, edit, limits);
+    } catch (err) {
+      if (err instanceof Refused) return err.outcome;
+      throw err;
+    }
+  }
+
+  private applyEditTx(ctx: RepoCtx, mapId: string, edit: EditInput, limits: EditLimits): Promise<EditOutcome> {
+    return this.withCtx(ctx, async (c) => {
+      // Read the map first, so the ways this can fail stay distinguishable. A
+      // plain select, NOT `for update`: per the Postgres docs, SELECT ... FOR
+      // UPDATE applies the UPDATE policy's USING clause as well as the SELECT
+      // policy's, so a row an ownership policy refuses would come back empty
+      // and get reported as "no such map". The guarded update below locks.
       const head = await c.query(
-        `select created_by from maps where id = $1 and archived_at is null`,
+        `select m.rev, m.created_by, m.archived_at is not null as archived, m.updated_at, u.name as updated_by_name
+           from maps m left join users u on u.id = m.updated_by
+          where m.id = $1`,
         [mapId],
       );
-      if (head.rowCount === 0) return { status: "not_found" } as const;
+      const row = head.rows[0];
+      if (!row) return { status: "not_found" } as const;
 
-      const decision = authorizeMapEdit(ctx, {
-        createdBy: head.rows[0]!.created_by,
-      });
-      if (!decision.allowed) {
-        return { status: "forbidden", reason: decision.reason! } as const;
+      // The DB policies are the backstop; this is the copy that can say why.
+      const decision = authorizeMapEdit(ctx, { createdBy: row.created_by });
+      if (!decision.allowed) return { status: "forbidden", reason: decision.reason! } as const;
+      if (row.archived) return { status: "forbidden", reason: ARCHIVED_REASON } as const;
+
+      // The guard and the bump are one statement. Zero rows means the caller
+      // read a stale rev — a lost write — unless the caller chose to overwrite.
+      // The row lock this takes serialises concurrent writers behind it, which
+      // also makes the settings read-modify-write below safe.
+      const guard = await c.query(
+        `update maps
+            set rev = rev + 1, updated_at = now(), updated_by = livemap_current_user(),
+                title = coalesce($3, title), title_dir = coalesce($4, title_dir), ui_dir = coalesce($5, ui_dir)
+          where id = $1 and ($2::bigint is null or rev = $2) and archived_at is null
+        returning rev, updated_at, settings`,
+        [mapId, edit.force ? null : edit.rev, edit.title?.value ?? null, edit.title?.dir ?? null, edit.uiDir ?? null],
+      );
+      if (guard.rowCount === 0) {
+        return {
+          status: "stale",
+          current: { rev: Number(row.rev), updatedBy: row.updated_by_name ?? FORMER_MEMBER, updatedAt: iso(row.updated_at)! },
+        } as const;
+      }
+      const applied = guard.rows[0]!;
+
+      let settings = applied.settings as MapSettings;
+      if (edit.settings) {
+        settings = applySettingsPatch(settings, edit.settings);
+        await c.query(`update maps set settings = $2::jsonb where id = $1`, [mapId, JSON.stringify(settings)]);
       }
 
-      // `rev` is deliberately left alone. It guards the feature set, and an
-      // editor holding the map open would otherwise lose its next save to a
-      // rename made in another tab.
+      if (edit.delete.length > 0) {
+        await c.query(`delete from features where map_id = $1 and id = any($2::text[])`, [mapId, [...edit.delete]]);
+      }
+      await this.putFeatures(c, ctx, mapId, edit.put);
+
+      // Counted after the write rather than predicted before it: a put may
+      // replace a row or add one, and only the table knows which.
+      const { rows: count } = await c.query(`select count(*)::int as n from features where map_id = $1`, [mapId]);
+      const total = Number(count[0]!.n);
+      if (total > limits.maxFeaturesPerMap) {
+        throw new Refused({ status: "quota", reason: featureQuotaReason(limits, total) });
+      }
+
+      // Every feature's group and preset must exist after this write, whether
+      // or not this request touched that feature: a settings change can remove
+      // a group other features still name.
+      const { rows: refs } = await c.query(
+        `select id, group_id as "groupId", preset_id as "presetId" from features
+          where map_id = $1 and (group_id is not null or preset_id is not null)`,
+        [mapId],
+      );
+      const problem = referenceProblem(settings, refs as MapFeature[]);
+      if (problem) throw new Refused({ status: "invalid", reason: problem });
+
+      return { status: "applied", rev: Number(applied.rev), updatedAt: iso(applied.updated_at)! } as const;
+    });
+  }
+
+  /** Upsert by (map_id, id). The server stamps who changed each feature and when. */
+  private async putFeatures(c: pg.PoolClient, ctx: RepoCtx, mapId: string, put: readonly MapFeature[]): Promise<void> {
+    for (const feature of put) {
+      const encoded = encodeFeature(feature);
       await c.query(
-        `update maps
-            set title     = coalesce($2, title),
-                title_dir = coalesce($3, title_dir),
-                ui_dir    = coalesce($4, ui_dir),
-                updated_at = now()
-          where id = $1 and archived_at is null`,
+        `insert into features
+           (id, map_id, tenant_id, kind, order_key, geom, props, group_id, preset_id, lineage_id,
+            hidden, locked, valid_from, valid_to, updated_by, updated_at)
+         values ($1, $2, $3, $4, $5, ST_GeomFromGeoJSON($6)::geography, $7::jsonb, $8, $9, $10,
+                 $11, $12, $13, $14, livemap_current_user(), now())
+         on conflict (map_id, id) do update
+            set kind = excluded.kind, order_key = excluded.order_key, geom = excluded.geom,
+                props = excluded.props, group_id = excluded.group_id, preset_id = excluded.preset_id,
+                lineage_id = excluded.lineage_id, hidden = excluded.hidden, locked = excluded.locked,
+                valid_from = excluded.valid_from, valid_to = excluded.valid_to,
+                updated_by = excluded.updated_by, updated_at = now()`,
         [
+          feature.id,
           mapId,
-          patch.title?.value ?? null,
-          patch.title?.dir ?? null,
-          patch.uiDir ?? null,
+          ctx.tenantId,
+          feature.kind,
+          feature.order,
+          JSON.stringify(encoded.geom),
+          JSON.stringify(encoded.props),
+          feature.groupId,
+          feature.presetId,
+          feature.lineageId,
+          feature.hidden,
+          feature.locked,
+          feature.validFrom,
+          feature.validTo,
         ],
       );
-
-      const map = await c.query(MAP_SELECT, [mapId]);
-      if (map.rowCount === 0) return { status: "not_found" } as const;
-      return { status: "updated", doc: decodeMap(map.rows[0]!) } as const;
-    });
+    }
   }
 
-  async setArchived(
-    ctx: RepoCtx,
-    mapId: string,
-    archived: boolean,
-  ): Promise<ArchiveOutcome> {
+  async setArchived(ctx: RepoCtx, mapId: string, archived: boolean, limits: CreateLimits): Promise<ArchiveOutcome> {
     if (!isUuid(mapId)) return { status: "not_found" };
-    return this.withCtx(ctx, async (c) => {
-      // No `archived_at is null` filter: unarchiving has to find the row.
-      const head = await c.query(`select created_by from maps where id = $1`, [
-        mapId,
-      ]);
-      if (head.rowCount === 0) return { status: "not_found" } as const;
-
-      // Archiving is an update, not a delete, so it follows the edit rule —
-      // a contributor may archive what they made and nothing else.
-      const decision = authorizeMapEdit(ctx, {
-        createdBy: head.rows[0]!.created_by,
+    if (!can(ctx.role, "map:archive")) {
+      return { status: "forbidden", reason: "Only an owner or an admin of this workspace can archive or restore maps." };
+    }
+    try {
+      return await this.withCtx(ctx, async (c) => {
+        const head = await c.query(`select archived_at is not null as archived from maps where id = $1`, [mapId]);
+        if (head.rowCount === 0) return { status: "not_found" } as const;
+        if (head.rows[0]!.archived === archived) return { status: "ok" } as const;
+        if (!archived) {
+          const { rows } = await c.query(`select count(*)::int as n from maps where archived_at is null`);
+          if (Number(rows[0]!.n) >= limits.maxMaps) return { status: "quota", reason: mapQuotaReason(limits) } as const;
+        }
+        // `updated_at` is left alone: archiving is not an edit of the map.
+        await c.query(`update maps set archived_at = case when $2 then now() end where id = $1`, [mapId, archived]);
+        return { status: "ok" } as const;
       });
-      if (!decision.allowed) {
-        return { status: "forbidden", reason: decision.reason! } as const;
+    } catch (err) {
+      // The trigger in 0004 is the backstop for the role rule above.
+      if ((err as { code?: string }).code === INSUFFICIENT_PRIVILEGE) {
+        return { status: "forbidden", reason: "Only an owner or an admin of this workspace can archive or restore maps." };
       }
-
-      await c.query(
-        `update maps
-            set archived_at = case when $2 then coalesce(archived_at, now()) end,
-                updated_at = now()
-          where id = $1`,
-        [mapId, archived],
-      );
-      return { status: "ok" } as const;
-    });
+      throw err;
+    }
   }
 
-  async listVersions(ctx: RepoCtx, mapId: string): Promise<VersionRecord[]> {
+  async listVersions(ctx: RepoCtx, mapId: string): Promise<VersionRow[]> {
     if (!isUuid(mapId)) return [];
     return this.withCtx(ctx, async (c) => {
-      const { rows } = await c.query(
-        `select ${VERSION_COLUMNS}
-           from map_versions
-          where map_id = $1
-          order by version desc`,
-        [mapId],
-      );
+      const { rows } = await c.query(`${VERSION_SELECT} where v.map_id = $1 order by v.version desc`, [mapId]);
       return rows.map(decodeVersion);
     });
   }
 
-  async getVersion(
-    ctx: RepoCtx,
-    mapId: string,
-    version: number,
-  ): Promise<VersionRecord | null> {
+  async getVersion(ctx: RepoCtx, mapId: string, version: number): Promise<VersionRow | null> {
     if (!isUuid(mapId)) return null;
     return this.withCtx(ctx, async (c) => {
-      const { rows } = await c.query(
-        `select ${VERSION_COLUMNS}
-           from map_versions
-          where map_id = $1 and version = $2`,
-        [mapId, version],
-      );
+      const { rows } = await c.query(`${VERSION_SELECT} where v.map_id = $1 and v.version = $2`, [mapId, version]);
       return rows[0] ? decodeVersion(rows[0]) : null;
     });
   }
 
-  async loadForPublish(
-    ctx: RepoCtx,
-    mapId: string,
-  ): Promise<PublishSnapshot | null> {
+  async getLatestVersion(ctx: RepoCtx, mapId: string): Promise<VersionRow | null> {
+    if (!isUuid(mapId)) return null;
+    return this.withCtx(ctx, async (c) => {
+      const { rows } = await c.query(`${VERSION_SELECT} where v.map_id = $1 order by v.version desc limit 1`, [mapId]);
+      return rows[0] ? decodeVersion(rows[0]) : null;
+    });
+  }
+
+  async loadForPublish(ctx: RepoCtx, mapId: string): Promise<PublishSnapshot | null> {
     if (!isUuid(mapId)) return null;
     // One transaction for all three reads. Separately they could straddle a
     // concurrent edit and publish a document whose features never coexisted
-    // with it, or compare an etag against a ledger row written in between.
+    // with it, or compare a hash against a ledger row written in between.
     return this.withCtx(ctx, async (c) => {
       const map = await c.query(MAP_SELECT, [mapId]);
       if (map.rowCount === 0) return null;
-
-      const feats = await c.query(
-        `select id, kind, at, ST_AsGeoJSON(geom) as geom, props
-           from features
-          where map_id = $1
-          order by at`,
-        [mapId],
-      );
-
-      const latest = await c.query(LATEST_VERSION_SELECT, [mapId]);
-
+      const features = await c.query(FEATURE_SELECT, [mapId]);
+      const latest = await c.query(`${VERSION_SELECT} where v.map_id = $1 order by v.version desc limit 1`, [mapId]);
       return {
         doc: decodeMap(map.rows[0]!),
-        createdBy: map.rows[0]!.created_by,
-        features: feats.rows.map(decodeFeature),
+        features: features.rows.map(decodeFeature),
         latest: latest.rows[0] ? decodeVersion(latest.rows[0]) : null,
       };
     });
   }
 
-  async recordNextVersion(
-    ctx: RepoCtx,
-    mapId: string,
-    build: (version: number) => VersionDraft,
-  ): Promise<VersionRecord | null> {
+  async recordNextVersion(ctx: RepoCtx, mapId: string, build: (version: number) => VersionDraft): Promise<VersionRow | null> {
     if (!isUuid(mapId)) return null;
     return this.withCtx(ctx, async (c) => {
-      // Allocation and insert in ONE transaction. They used to be two calls —
-      // nextVersion() then recordVersion() — each opening its own transaction,
-      // so two publishers could read the same max(version) and the second would
-      // collide on the (map_id, version) primary key only after it had already
-      // written its artifact.
-      //
-      // A transaction-scoped advisory lock serialises publishers for this map.
-      // `select ... for update` on the maps row would be the obvious lock, but
-      // per the Postgres docs it also applies the maps UPDATE policy, which a
-      // publishing role need not satisfy — publishing writes the ledger, not
-      // the map. The lock is released on commit or rollback, so an interrupted
-      // publish cannot leave it held.
-      await c.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [
-        mapId,
-      ]);
+      // Allocation and insert in ONE transaction, serialised per map by a
+      // transaction-scoped advisory lock. `select ... for update` on the maps
+      // row would be the obvious lock, but per the Postgres docs it also
+      // applies the maps UPDATE policy, which a publishing role need not
+      // satisfy. The lock is released on commit or rollback.
+      await c.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [mapId]);
 
-      const exists = await c.query(
-        `select 1 from maps where id = $1 and archived_at is null`,
-        [mapId],
-      );
+      const exists = await c.query(`select 1 from maps where id = $1 and archived_at is null`, [mapId]);
       if (exists.rowCount === 0) return null;
 
-      const { rows: n } = await c.query(
-        `select coalesce(max(version), 0) + 1 as next
-           from map_versions where map_id = $1`,
-        [mapId],
-      );
+      const { rows: n } = await c.query(`select coalesce(max(version), 0) + 1 as next from map_versions where map_id = $1`, [mapId]);
       const version = Number(n[0]!.next);
 
-      // Called inside the transaction because the artifact's storage key and
-      // byte size both depend on the number just allocated.
+      // Inside the transaction because the artifact's storage key and byte size
+      // both depend on the number just allocated.
       const draft = build(version);
-
       await c.query(
         `insert into map_versions
-           (map_id, version, tenant_id, etag, storage_key, byte_size,
-            feature_count, published_at, published_by)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (map_id, version, tenant_id, etag, storage_key, byte_size, feature_count,
+            published_at, published_by, source_rev, origin_type, origin_from_version)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, livemap_current_user(), $9, $10, $11)`,
         [
           mapId,
           version,
@@ -897,36 +649,49 @@ export class PostgresRepo implements MapRepo {
           draft.byteSize,
           draft.featureCount,
           draft.publishedAt,
-          draft.publishedBy,
+          draft.sourceRev,
+          draft.origin.type,
+          draft.origin.type === "rollback" ? draft.origin.fromVersion : null,
         ],
       );
-
-      return { ...draft, mapId, version };
+      const { rows } = await c.query(`${VERSION_SELECT} where v.map_id = $1 and v.version = $2`, [mapId, version]);
+      return decodeVersion(rows[0]!);
     });
   }
 
-  async getLatestVersion(
+  async setPublished(
     ctx: RepoCtx,
     mapId: string,
-  ): Promise<VersionRecord | null> {
-    if (!isUuid(mapId)) return null;
+    live: { readonly version: number; readonly rev: number },
+    writePointer: () => Promise<void>,
+  ): Promise<boolean> {
+    if (!isUuid(mapId)) return false;
     return this.withCtx(ctx, async (c) => {
-      const { rows } = await c.query(LATEST_VERSION_SELECT, [mapId]);
-      return rows[0] ? decodeVersion(rows[0]) : null;
+      // Serialised with the allocation above, and guarded: a slower publish of
+      // an older version must not move the map backwards. `updated_at` is left
+      // alone, since publishing is not an edit of the draft.
+      await c.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [mapId]);
+      const out = await c.query(
+        `update maps set published_version = $2, published_rev = least($3::bigint, rev)
+          where id = $1 and (published_version is null or published_version <= $2)`,
+        [mapId, live.version, live.rev],
+      );
+      if ((out.rowCount ?? 0) === 0) return false;
+      // Inside the transaction and under the lock: the object store cannot
+      // join it, but holding the lock means no other publish of this map can
+      // write its pointer in between, and a failed write rolls the map back.
+      await writePointer();
+      return true;
     });
   }
 
-  async setPublishedVersion(
-    ctx: RepoCtx,
-    mapId: string,
-    version: number,
-  ): Promise<void> {
+  async confirmPublishedRev(ctx: RepoCtx, mapId: string, live: { readonly version: number; readonly rev: number }): Promise<void> {
     if (!isUuid(mapId)) return;
     await this.withCtx(ctx, async (c) => {
       await c.query(
-        `update maps set published_version = $2, updated_at = now()
-          where id = $1`,
-        [mapId, version],
+        `update maps set published_rev = greatest(coalesce(published_rev, 0), least($3::bigint, rev))
+          where id = $1 and published_version = $2`,
+        [mapId, live.version, live.rev],
       );
     });
   }

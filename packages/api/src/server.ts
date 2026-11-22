@@ -10,10 +10,22 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import swagger from "@fastify/swagger";
 import apiReference from "@scalar/fastify-api-reference";
-import type { MapFeature, RichText, TextDir } from "@livemap/core";
-import type { MapDraft, MapPatch, MapRepo, RepoCtx } from "./repo.js";
-import type { ArtifactStore } from "./storage.js";
-import { publishMap, rollbackMap, type PublishOutcome } from "./publish.js";
+import {
+  templateSettings,
+  TEMPLATES,
+  type ApiErrorCode,
+  type AppConfig,
+  type CreateMapRequest,
+  type EditRequest,
+  type ErrorBody,
+  type Session,
+  type VersionRecord,
+  pointerBody,
+  VERSION_CACHE_CONTROL,
+} from "@livemap/core";
+import type { MapRepo, RepoCtx, VersionRow } from "./repo.js";
+import { keys, type ArtifactStore } from "./storage.js";
+import { artifactUrl, publishMap, rollbackMap, type PublishOutcome } from "./publish.js";
 import { can, capabilitiesOf } from "./authz.js";
 import {
   DEFAULT_LIMITS,
@@ -23,10 +35,11 @@ import {
   type Limits,
   type RateLimits,
 } from "./limits.js";
-import { BLANK_VIEWPORT, TEMPLATES, findTemplate } from "./templates.js";
 import type { GuestProvisioner } from "./guests.js";
 import type { HumanCheck } from "./turnstile.js";
 import type { SessionClaims } from "./auth.js";
+import { GazetteerPlaces, type PlaceSearch } from "./places.js";
+import { editProblem } from "./validate.js";
 import {
   CREATE_BODY,
   EDIT_APPLIED,
@@ -37,7 +50,7 @@ import {
   LIST_QUERY,
   MAP_PARAMS,
   OK,
-  PATCH_BODY,
+  PLACES_QUERY,
   ROLLBACK_BODY,
 } from "./schemas.js";
 import { DOCS_CSS } from "./docs-theme.js";
@@ -54,12 +67,17 @@ export interface Actor extends RepoCtx {
   readonly expiresAt?: number;
 }
 
+/**
+ * An actor; null for a request with no usable credential; or a refusal with a
+ * reason a person can act on, such as an expired guest workspace.
+ */
+export type AuthResult = Actor | null | { readonly refused: string };
+
 export interface AuthResolver {
-  /** Return null to reject with 401. */
-  resolve(req: FastifyRequest): Promise<Actor | null>;
+  resolve(req: FastifyRequest): Promise<AuthResult>;
 }
 
-/** Everything guest signup needs. Leave it out and the route does not exist. */
+/** Everything guest signup needs. Leave it out and signup answers 403 guest_signup_disabled. */
 export interface GuestSignup {
   readonly provisioner: GuestProvisioner;
   /** Kept as a function so the server never holds the signing secret. */
@@ -129,6 +147,8 @@ export interface ServerDeps {
    * or a refresh lands in the client router rather than on a 404.
    */
   readonly appDir?: string;
+  /** Place search for the editor. Defaults to the built-in gazetteer. */
+  readonly places?: PlaceSearch;
 }
 
 /** Every JSON route lives under this, and nothing under it is reachable without an actor. */
@@ -232,22 +252,28 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   app.decorateRequest("actor", null);
 
   // Never return a stack trace or a driver message to a client; log it instead.
+  // Every refusal leaves in the one error shape (`ErrorBody`), with a reason.
   app.setErrorHandler((err: FastifyError, req, reply) => {
     const status = err.statusCode ?? 500;
     if (status >= 500) {
       req.log?.error({ err, reqId: req.id }, "request failed");
-      return reply.code(500).send({ error: "internal_error", reqId: req.id });
+      return refuse(reply, 500, "internal_error", "The server failed while handling this request.");
     }
     if (err.validation) {
       // The message names the offending field and nothing else; it is built
       // from the schema, not from anything internal.
-      return reply
-        .code(400)
-        .send({ error: "invalid_request", message: err.message });
+      return refuse(reply, 400, "invalid_request", `The request does not match what the server accepts: ${err.message}.`);
     }
-    // The limiter has already set retry-after on the reply.
-    if (status === 429) return reply.code(429).send({ error: "rate_limited" });
-    return reply.code(status).send({ error: err.code ?? "bad_request" });
+    if (status === 413) {
+      return refuse(reply, 413, "body_too_large", "This request is larger than the server accepts in one go.");
+    }
+    if (status === 429) {
+      // The limiter has already set retry-after on the reply.
+      const retryAfter = Number(reply.getHeader("retry-after") ?? 60);
+      return refuse(reply, 429, "rate_limited", "Too many requests in a short time. Wait a moment, then try again.", { retryAfter });
+    }
+    if (status === 404) return refuse(reply, 404, "not_found", "There is nothing at this address.");
+    return refuse(reply, status, "invalid_request", "The request could not be understood.");
   });
 
   if (deps.appDir) {
@@ -340,8 +366,25 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     };
   })();
 
-  const quota = (reply: FastifyReply, reason: string) =>
-    reply.code(403).send({ error: "quota_exceeded", reason });
+  const quota = (reply: FastifyReply, reason: string) => refuse(reply, 403, "quota_exceeded", reason);
+  const forbidden = (reply: FastifyReply, reason: string) => refuse(reply, 403, "forbidden", reason);
+  const notFound = (reply: FastifyReply) => refuse(reply, 404, "not_found", "There is no such map in this workspace.");
+  const places = deps.places ?? new GazetteerPlaces();
+
+  /** What the front end's ledger shows for a version: the ledger row plus where its bytes are and how they are cached. */
+  const versionRecord = (row: VersionRow): VersionRecord => ({
+    mapId: row.mapId,
+    version: row.version,
+    etag: row.etag,
+    storageKey: row.storageKey,
+    url: artifactUrl(artifactBase, row.storageKey),
+    byteSize: row.byteSize,
+    featureCount: row.featureCount,
+    publishedAt: row.publishedAt,
+    publishedBy: row.publishedBy,
+    cacheControl: VERSION_CACHE_CONTROL,
+    origin: row.origin,
+  });
 
   // The probes and the dev artifact route. In a child scope like everything
   // else, so that they are declared after the plugins above have loaded and
@@ -364,12 +407,22 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   root.get(
     "/config",
     { schema: { tags: ["session"], summary: "Public client configuration" } },
-    async (_req, reply) =>
-      reply.header("access-control-allow-origin", "*").send({
+    async (_req, reply) => {
+      const config: AppConfig = {
         artifactBase,
         guestSignup: Boolean(deps.guests),
         humanCheckSiteKey: deps.guests?.humanCheckSiteKey ?? null,
-      }),
+        guest: deps.guests
+          ? {
+              lifetimeHours: Math.round((deps.guests.ttlSecs ?? GUEST_TTL_SECS) / 3600),
+              maxMaps: limits.guest.maxMaps,
+              maxFeaturesPerMap: limits.guest.maxFeaturesPerMap,
+              maxVersionsPerMap: limits.guest.maxVersionsPerMap ?? 0,
+            }
+          : null,
+      };
+      return reply.header("access-control-allow-origin", "*").send(config);
+    },
   );
 
   // Liveness says the process is up; readiness says it can serve. A failing
@@ -405,7 +458,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
       const key = req.params["*"];
       const obj = await deps.store.get(key);
-      if (!obj) return reply.code(404).send({ error: "not_found" });
+      if (!obj) return refuse(reply, 404, "not_found", "Nothing has been published at this address.");
 
       const inm = req.headers["if-none-match"];
       if (inm && inm === obj.etag) {
@@ -436,7 +489,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         reply
           .code(204)
           .header("access-control-allow-origin", "*")
-          .header("access-control-allow-methods", "GET, HEAD")
+          .header("access-control-allow-methods", "GET, HEAD, OPTIONS")
           .header("access-control-allow-headers", "cache-control, if-none-match")
           .header("access-control-max-age", "600")
           .send(),
@@ -448,55 +501,51 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // with the most in front of it. In order — a per-address rate limit, a human
   // check, a ceiling on how many guests may exist at all — and only then a
   // tenant. A child scope for the same reason as the API below: the limiter
-  // has to have run before the route is declared.
+  // has to have run before the route is declared. Registered whether or not
+  // guests are enabled, so a client is told why rather than meeting a 404.
   const guests = deps.guests;
-  if (guests) {
-    app.register(async (scope) => {
-      scope.post<{ Body?: { turnstileToken?: string } }>(
-        "/auth/guest",
-        {
-          schema: {
-            tags: ["session"],
-            summary: "Start a temporary guest workspace",
-            description:
-              "Creates a workspace that expires after seven days and returns a " +
-              "bearer token for it. Send an empty JSON object when no human " +
-              "check is configured.",
-            body: GUEST_BODY,
-            response: { 201: GUEST_CREATED, 403: ERROR, 429: ERROR, 503: ERROR },
-          },
-          ...tier("signup"),
+  app.register(async (scope) => {
+    scope.post<{ Body?: { turnstileToken?: string } }>(
+      "/auth/guest",
+      {
+        schema: {
+          tags: ["session"],
+          summary: "Start a temporary guest workspace",
+          description:
+            "Creates a workspace that expires after a fixed time (see `guest` in `/config`) and " +
+            "returns a bearer token for it. Send an empty JSON object when no human check is configured.",
+          body: GUEST_BODY,
+          response: { 201: GUEST_CREATED, 403: ERROR, 429: ERROR, 503: ERROR },
         },
-        async (req, reply) => {
-          if (
-            guests.humanCheck &&
-            !(await guests.humanCheck(req.body?.turnstileToken, req.ip))
-          ) {
-            return reply.code(403).send({ error: "human_check_failed" });
-          }
+        ...tier("signup"),
+      },
+      async (req, reply) => {
+        if (!guests) {
+          return refuse(reply, 403, "guest_signup_disabled", "Guest workspaces are switched off on this server.");
+        }
+        if (guests.humanCheck && !(await guests.humanCheck(req.body?.turnstileToken, req.ip))) {
+          return refuse(reply, 403, "human_check_failed", "The human check did not pass. Run it again, then continue.");
+        }
 
-          const cap = guests.maxGuests ?? DEFAULT_MAX_GUESTS;
-          if ((await guests.provisioner.count()) >= cap) {
-            // 503, not 429: the caller did nothing wrong and waiting a minute
-            // will not help. Capacity returns when expired guests are reaped.
-            return reply
-              .code(503)
-              .header("retry-after", 3600)
-              .send({ error: "guest_capacity" });
-          }
-
-          const identity = await guests.provisioner.provision();
-          const exp =
-            Math.floor(Date.now() / 1000) + (guests.ttlSecs ?? GUEST_TTL_SECS);
-          return reply.code(201).send({
-            token: guests.issueToken({ ...identity, exp }),
-            tenantSlug: identity.tenantSlug,
-            expiresAt: new Date(exp * 1000).toISOString(),
+        const cap = guests.maxGuests ?? DEFAULT_MAX_GUESTS;
+        if ((await guests.provisioner.count()) >= cap) {
+          // 503, not 429: the caller did nothing wrong and waiting a minute
+          // will not help. Capacity returns when expired guests are reaped.
+          return refuse(reply, 503, "guest_capacity", "Every guest workspace is in use at the moment. Try again later.", {
+            retryAfter: 3600,
           });
-        },
-      );
-    });
-  }
+        }
+
+        const identity = await guests.provisioner.provision();
+        const exp = Math.floor(Date.now() / 1000) + (guests.ttlSecs ?? GUEST_TTL_SECS);
+        return reply.code(201).send({
+          token: guests.issueToken({ ...identity, exp }),
+          tenantSlug: identity.tenantSlug,
+          expiresAt: new Date(exp * 1000).toISOString(),
+        });
+      },
+    );
+  });
 
   // The API is a child scope for two reasons. It is registered after the rate
   // limiter, whose onRoute hook only sees routes declared once it has actually
@@ -504,457 +553,368 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // belongs to the scope rather than to the server: everything under the prefix
   // is denied by default, unknown paths included, and nothing outside it needs
   // an allowlist entry to be reachable.
-  app.register(async (scope) => {
-    // Counts rejected credentials per address. Not a route limit, because it
-    // must count only the failures: a newsroom's valid traffic shares an
-    // address and must never be throttled by it.
-    const failedAuth = tiers.unauth
-      ? scope.createRateLimit({
-          max: tiers.unauth.max,
-          timeWindow: tiers.unauth.timeWindow,
-          keyGenerator: (req) => `unauth:${req.ip}`,
-        })
-      : null;
+  app.register(
+    async (scope) => {
+      // Counts rejected credentials per address. Not a route limit, because it
+      // must count only the failures: a newsroom's valid traffic shares an
+      // address and must never be throttled by it.
+      const failedAuth = tiers.unauth
+        ? scope.createRateLimit({
+            max: tiers.unauth.max,
+            timeWindow: tiers.unauth.timeWindow,
+            keyGenerator: (req) => `unauth:${req.ip}`,
+          })
+        : null;
 
-    // The one place tenant scoping is established; handlers below assume
-    // `req.actor` is present and already scoped.
-    scope.addHook("onRequest", async (req, reply) => {
-      const claimed = await deps.auth.resolve(req);
+      // The one place tenant scoping is established; handlers below assume
+      // `req.actor` is present and already scoped.
+      scope.addHook("onRequest", async (req, reply) => {
+        const result = await deps.auth.resolve(req);
+        const claimed = result !== null && !("refused" in result) ? result : null;
 
-      // The token says who; the database says what they may do, and whether
-      // they are still anyone at all. A role claim outlives a demotion, and a
-      // guest's token outlives the workspace it was issued for.
-      const role = claimed ? await deps.repo.membershipRole(claimed) : null;
+        // The token says who; the database says what they may do, and whether
+        // they are still anyone at all. A role claim outlives a demotion, and a
+        // guest's token outlives the workspace it was issued for.
+        const role = claimed ? await deps.repo.membershipRole(claimed) : null;
 
-      if (!claimed || role === null) {
-        if (failedAuth) {
-          const hit = await failedAuth(req);
-          if (!hit.isAllowed && hit.isExceeded) {
-            return reply
-              .code(429)
-              .header("retry-after", hit.ttlInSeconds)
-              .send({ error: "rate_limited" });
+        if (!claimed || role === null) {
+          if (failedAuth) {
+            const hit = await failedAuth(req);
+            if (!hit.isAllowed && hit.isExceeded) {
+              return refuse(reply, 429, "rate_limited", "Too many rejected sign-ins from this address. Wait, then try again.", {
+                retryAfter: hit.ttlInSeconds,
+              });
+            }
           }
-        }
-        return reply.code(401).send({ error: "unauthorised" });
-      }
-
-      const actor: Actor = { ...claimed, role };
-      (req as FastifyRequest & { actor: Actor }).actor = actor;
-
-      // The server-wide body limit is the ceiling; a tenant's own may be
-      // lower. Checked on the declared length, before anything is read.
-      const declared = Number(req.headers["content-length"] ?? 0);
-      if (declared > limitsOf(actor).maxBodyBytes) {
-        return reply.code(413).send({ error: "body_too_large" });
-      }
-      return;
-    });
-
-    // An API miss is always JSON, whatever the caller's fallback serves for
-    // pages. Scoped, so the hook above runs first and an anonymous probe of the
-    // prefix learns nothing about which routes exist.
-    scope.setNotFoundHandler((_req, reply) =>
-      reply.code(404).send({ error: "not_found" }),
-    );
-
-    // What the shell needs to draw itself, so it never has to decode a token.
-    const secured = [{ bearer: [] }];
-
-    scope.get(
-      "/me",
-      {
-        schema: {
-          tags: ["session"],
-          summary: "The caller: role, capabilities, usage and limits",
-          security: secured,
-        },
-        ...tier("read"),
-      },
-      async (req) => {
-      const actor = actorOf(req);
-      return {
-        userId: actor.userId,
-        tenant: { id: actor.tenantId, slug: actor.tenantSlug },
-        role: actor.role,
-        capabilities: capabilitiesOf(actor.role),
-        guest: isGuestSlug(actor.tenantSlug),
-        expiresAt:
-          actor.expiresAt === undefined
-            ? null
-            : new Date(actor.expiresAt * 1000).toISOString(),
-        usage: { maps: await deps.repo.countMaps(actor) },
-        limits: limitsOf(actor),
-        artifactBase,
-      };
-      },
-    );
-
-    scope.get(
-      "/templates",
-      {
-        schema: {
-          tags: ["maps"],
-          summary: "Starting points offered when creating a map",
-          security: secured,
-        },
-        ...tier("read"),
-      },
-      async () => ({
-        templates: TEMPLATES.map((t) => ({
-          id: t.id,
-          title: t.title,
-          uiDir: t.uiDir,
-          featureCount: t.features.length,
-        })),
-      }),
-    );
-
-    scope.get<{ Querystring: { archived?: "0" | "1" } }>(
-      "/maps",
-      {
-        schema: {
-          tags: ["maps"],
-          summary: "List the workspace's maps",
-          security: secured,
-          querystring: LIST_QUERY,
-        },
-        ...tier("read"),
-      },
-      async (req) => ({
-        maps: await deps.repo.listMaps(actorOf(req), {
-          archived: req.query.archived === "1",
-        }),
-      }),
-    );
-
-    scope.post<{
-      Body: { title: RichText; uiDir?: TextDir; template?: string };
-    }>(
-      "/maps",
-      {
-        schema: {
-          tags: ["maps"],
-          summary: "Create a map, empty or from a template",
-          security: secured,
-          body: CREATE_BODY,
-        },
-        ...tier("write"),
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        if (!can(actor.role, "map:create")) {
-          return reply.code(403).send({ error: "forbidden" });
+          const reason =
+            result !== null && "refused" in result
+              ? result.refused
+              : claimed
+                ? isGuestSlug(claimed.tenantSlug)
+                  ? "This guest workspace no longer exists. Start a new one to keep working."
+                  : "You are no longer a member of this workspace."
+                : "Sign in to continue: no valid session token was sent.";
+          return refuse(reply, 401, "unauthorised", reason);
         }
 
-        const template = req.body.template
-          ? findTemplate(req.body.template)
-          : null;
-        if (req.body.template && !template) {
-          return reply.code(400).send({ error: "unknown_template" });
-        }
+        const actor: Actor = { ...claimed, role };
+        (req as FastifyRequest & { actor: Actor }).actor = actor;
 
-        const draft: MapDraft = {
-          title: req.body.title,
-          uiDir: req.body.uiDir ?? template?.uiDir ?? "ltr",
-          viewport: template?.viewport ?? BLANK_VIEWPORT,
-          basemap: {
-            styleId: "light",
-            labelLangs: template?.labelLangs ?? ["en"],
+        // The server-wide body limit is the ceiling; a tenant's own may be
+        // lower. Checked on the declared length, before anything is read.
+        const declared = Number(req.headers["content-length"] ?? 0);
+        if (declared > limitsOf(actor).maxBodyBytes) {
+          return refuse(reply, 413, "body_too_large", "This save is larger than this workspace accepts in one request.");
+        }
+        return;
+      });
+
+      // An API miss is always JSON, whatever the caller's fallback serves for
+      // pages. Scoped, so the hook above runs first and an anonymous probe of
+      // the prefix learns nothing about which routes exist.
+      scope.setNotFoundHandler((_req, reply) => refuse(reply, 404, "not_found", "There is no such endpoint."));
+
+      const secured = [{ bearer: [] }];
+
+      // What the front end needs to draw itself, so it never has to decode a token.
+      scope.get(
+        "/session",
+        { schema: { tags: ["session"], summary: "The caller: role, capabilities, usage and limits", security: secured }, ...tier("read") },
+        async (req): Promise<Session> => {
+          const actor = actorOf(req);
+          const info = await deps.repo.sessionInfo(actor);
+          const own = limitsOf(actor);
+          return {
+            userId: actor.userId,
+            name: info.userName,
+            tenant: { id: actor.tenantId, slug: actor.tenantSlug, name: info.tenantName },
+            role: actor.role as Session["role"],
+            capabilities: SESSION_CAPABILITIES.filter((capability) => capabilitiesOf(actor.role).includes(capability)),
+            guest: isGuestSlug(actor.tenantSlug),
+            expiresAt: actor.expiresAt === undefined ? null : new Date(actor.expiresAt * 1000).toISOString(),
+            usage: { maps: await deps.repo.countMaps(actor) },
+            limits: { maxMaps: own.maxMaps, maxFeaturesPerMap: own.maxFeaturesPerMap, maxVersionsPerMap: own.maxVersionsPerMap },
+            artifactBase,
+          };
+        },
+      );
+
+      scope.get(
+        "/templates",
+        { schema: { tags: ["maps"], summary: "Starting points offered when creating a map", security: secured }, ...tier("read") },
+        async () => ({ templates: TEMPLATES }),
+      );
+
+      scope.get<{ Querystring: { q: string; lang?: "ar" | "en" } }>(
+        "/places",
+        {
+          schema: { tags: ["maps"], summary: "Find a place by name, in Arabic or English", security: secured, querystring: PLACES_QUERY },
+          ...tier("read"),
+        },
+        async (req) => ({ places: await places.search(req.query.q, req.query.lang ?? "en") }),
+      );
+
+      scope.get<{ Querystring: { archived?: "true" | "false" } }>(
+        "/maps",
+        {
+          schema: { tags: ["maps"], summary: "List the workspace's maps", security: secured, querystring: LIST_QUERY },
+          ...tier("read"),
+        },
+        async (req) => ({ maps: await deps.repo.listMaps(actorOf(req), { archived: req.query.archived === "true" }) }),
+      );
+
+      scope.post<{ Body: CreateMapRequest }>(
+        "/maps",
+        {
+          schema: { tags: ["maps"], summary: "Create a map from a template", security: secured, body: CREATE_BODY },
+          ...tier("write"),
+        },
+        async (req, reply) => {
+          const actor = actorOf(req);
+          if (!can(actor.role, "map:create")) return forbidden(reply, "Your role in this workspace does not allow creating maps.");
+          const out = await deps.repo.createMap(
+            actor,
+            { title: req.body.title, uiDir: req.body.uiDir, settings: templateSettings(req.body.template, req.body.uiDir) },
+            { maxMaps: limitsOf(actor).maxMaps },
+          );
+          if (out.status === "quota") return quota(reply, out.reason);
+          return reply.code(201).send({ map: out.map });
+        },
+      );
+
+      scope.get<MapParams>(
+        "/maps/:mapId",
+        {
+          schema: { tags: ["maps"], summary: "A map, its settings and all of its features", security: secured, params: MAP_PARAMS },
+          ...tier("read"),
+        },
+        async (req, reply) => {
+          const loaded = await deps.repo.getMap(actorOf(req), req.params.mapId);
+          return loaded ?? notFound(reply);
+        },
+      );
+
+      for (const [path, archived] of [
+        ["archive", true],
+        ["unarchive", false],
+      ] as const) {
+        scope.post<MapParams>(
+          `/maps/:mapId/${path}`,
+          {
+            schema: {
+              tags: ["maps"],
+              summary: archived ? "Archive a map. Does not unpublish it" : "Restore an archived map",
+              security: secured,
+              params: MAP_PARAMS,
+              response: { 403: ERROR, 404: ERROR },
+            },
+            ...tier("write"),
           },
-          features: template?.features ?? [],
-        };
+          async (req, reply) => {
+            const actor = actorOf(req);
+            const out = await deps.repo.setArchived(actor, req.params.mapId, archived, { maxMaps: limitsOf(actor).maxMaps });
+            switch (out.status) {
+              case "ok":
+                return reply.code(204).send();
+              case "not_found":
+                return notFound(reply);
+              case "forbidden":
+                return forbidden(reply, out.reason);
+              case "quota":
+                return quota(reply, out.reason);
+            }
+          },
+        );
+      }
 
-        const out = await deps.repo.createMap(actor, draft, {
-          maxMaps: limitsOf(actor).maxMaps,
-        });
-        if (out.status === "quota") return quota(reply, out.reason);
-        return reply.code(201).send({ map: out.doc });
-      },
-    );
-
-    scope.get<MapParams>(
-      "/maps/:mapId",
-      {
-        schema: {
-          tags: ["maps"],
-          summary: "A map and all of its features",
-          security: secured,
-          params: MAP_PARAMS,
+      scope.get<MapParams>(
+        "/maps/:mapId/versions",
+        {
+          schema: { tags: ["publishing"], summary: "The live pointer and the version ledger, newest first", security: secured, params: MAP_PARAMS },
+          ...tier("read"),
         },
-        ...tier("read"),
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        const doc = await deps.repo.getMap(actor, req.params.mapId);
-        if (!doc) return reply.code(404).send({ error: "not_found" });
-        const features = await deps.repo.listFeatures(actor, req.params.mapId);
-        return { map: doc, features };
-      },
-    );
-
-    scope.patch<MapParams & { Body: { title?: RichText; uiDir?: TextDir } }>(
-      "/maps/:mapId",
-      {
-        schema: {
-          tags: ["maps"],
-          summary: "Retitle a map or change its direction",
-          description:
-            "The slug cannot be changed: published artifact URLs are built " +
-            "from it.",
-          security: secured,
-          params: MAP_PARAMS,
-          body: PATCH_BODY,
+        async (req, reply) => {
+          const actor = actorOf(req);
+          const loaded = await deps.repo.getMap(actor, req.params.mapId);
+          if (!loaded) return notFound(reply);
+          const rows = await deps.repo.listVersions(actor, req.params.mapId);
+          const live = rows.find((row) => row.version === loaded.map.publishedVersion) ?? null;
+          const pointerKey = keys.pointer(actor.tenantSlug, loaded.map.slug);
+          return {
+            pointer: pointerBody({
+              version: live?.version ?? null,
+              url: artifactUrl(artifactBase, pointerKey),
+              etag: live?.etag ?? null,
+              updatedAt: live?.publishedAt ?? null,
+            }),
+            versions: rows.map(versionRecord),
+          };
         },
-        ...tier("write"),
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        if (!can(actor.role, "map:edit")) {
-          return reply.code(403).send({ error: "forbidden" });
-        }
+      );
 
-        const patch: MapPatch = {
-          ...(req.body.title ? { title: req.body.title } : {}),
-          ...(req.body.uiDir ? { uiDir: req.body.uiDir } : {}),
-        };
-        const out = await deps.repo.updateMap(actor, req.params.mapId, patch);
-
-        switch (out.status) {
-          case "updated":
-            return { map: out.doc };
-          case "not_found":
-            return reply.code(404).send({ error: "not_found" });
-          case "forbidden":
-            return reply.code(403).send({ error: "forbidden", reason: out.reason });
-        }
-      },
-    );
-
-    for (const [path, archived] of [
-      ["archive", true],
-      ["unarchive", false],
-    ] as const) {
-      scope.post<MapParams>(
-        `/maps/:mapId/${path}`,
+      scope.post<MapParams & { Body: EditRequest }>(
+        "/maps/:mapId/edit",
         {
           schema: {
-            tags: ["maps"],
-            summary: archived
-              ? "Archive a map. Does not unpublish it"
-              : "Restore an archived map",
+            tags: ["editing"],
+            summary: "Save features, settings, title and direction against a known revision",
+            description:
+              "`rev` is the revision the client last read. A stale one is refused with 409 and the " +
+              "current revision, unless `force` is set, in which case only what this request names " +
+              "is overwritten.",
             security: secured,
             params: MAP_PARAMS,
+            body: EDIT_BODY,
+            response: { 200: EDIT_APPLIED, 400: ERROR, 403: ERROR, 404: ERROR, 409: ERROR, 413: ERROR },
           },
           ...tier("write"),
         },
         async (req, reply) => {
           const actor = actorOf(req);
-          if (!can(actor.role, "map:edit")) {
-            return reply.code(403).send({ error: "forbidden" });
-          }
-          const out = await deps.repo.setArchived(
+
+          // The cheap half of the decision, before the body is even looked at.
+          // The other half needs the map row — whether a contributor owns it,
+          // whether it is archived — and so happens inside `applyEdit`.
+          if (!can(actor.role, "map:edit")) return forbidden(reply, "Your role in this workspace does not allow editing maps.");
+
+          const problem = editProblem(req.body);
+          if (problem) return refuse(reply, 400, "invalid_request", problem);
+
+          const out = await deps.repo.applyEdit(
             actor,
             req.params.mapId,
-            archived,
+            {
+              rev: req.body.rev,
+              force: req.body.force === true,
+              put: req.body.put,
+              delete: req.body.delete,
+              ...(req.body.settings ? { settings: req.body.settings } : {}),
+              ...(req.body.title ? { title: req.body.title } : {}),
+              ...(req.body.uiDir ? { uiDir: req.body.uiDir } : {}),
+            },
+            { maxFeaturesPerMap: limitsOf(actor).maxFeaturesPerMap },
           );
+
           switch (out.status) {
-            case "ok":
-              return { archived };
+            case "applied":
+              return { rev: out.rev, updatedAt: out.updatedAt };
+            case "stale":
+              // 409, not 500: the client should re-read, or overwrite on purpose.
+              return refuse(reply, 409, "stale_revision", `${out.current.updatedBy} saved this map after you opened it.`, {
+                current: out.current,
+              });
             case "not_found":
-              return reply.code(404).send({ error: "not_found" });
+              return notFound(reply);
             case "forbidden":
-              return reply
-                .code(403)
-                .send({ error: "forbidden", reason: out.reason });
+              // Distinct from 409 on purpose: retrying will never help.
+              return forbidden(reply, out.reason);
+            case "quota":
+              return quota(reply, out.reason);
+            case "invalid":
+              return refuse(reply, 400, "invalid_request", out.reason);
           }
         },
       );
-    }
 
-    scope.get<MapParams>(
-      "/maps/:mapId/versions",
-      {
-        schema: {
-          tags: ["publishing"],
-          summary: "The version ledger, newest first",
-          security: secured,
-          params: MAP_PARAMS,
+      // Shared by publish and rollback, which differ only in what a success is called.
+      const sendPublish = (reply: FastifyReply, out: Exclude<PublishOutcome, { status: "published" }>) => {
+        switch (out.status) {
+          case "unchanged":
+            // 200, not 201: nothing was created.
+            return reply.code(200).send({ status: "unchanged", version: out.version, etag: out.etag });
+          case "forbidden":
+            return forbidden(reply, out.reason);
+          case "not_found":
+            return notFound(reply);
+          case "quota":
+            return quota(reply, out.reason);
+        }
+      };
+
+      scope.post<MapParams>(
+        "/maps/:mapId/publish",
+        {
+          schema: {
+            tags: ["publishing"],
+            summary: "Publish the map as a new immutable version",
+            description: "Answers 200 `unchanged` when readers would see nothing new, so their caches stay warm.",
+            security: secured,
+            params: MAP_PARAMS,
+          },
+          ...publishTier,
         },
-        ...tier("read"),
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        const doc = await deps.repo.getMap(actor, req.params.mapId);
-        if (!doc) return reply.code(404).send({ error: "not_found" });
-        return {
-          publishedVersion: doc.publishedVersion ?? null,
-          versions: await deps.repo.listVersions(actor, req.params.mapId),
-        };
-      },
-    );
-
-    scope.post<
-      MapParams & {
-        Body: { rev?: number; put?: MapFeature[]; delete?: string[] };
-      }
-    >(
-      "/maps/:mapId/edit",
-      {
-        schema: {
-          tags: ["editing"],
-          summary: "Put and delete features against a known revision",
-          description:
-            "`rev` is the revision the client last read. A stale one is " +
-            "refused with 409 rather than overwriting an edit it never saw.",
-          security: secured,
-          params: MAP_PARAMS,
-          body: EDIT_BODY,
-          response: { 200: EDIT_APPLIED, 400: ERROR, 403: ERROR, 404: ERROR, 409: ERROR },
+        async (req, reply) => {
+          const actor = actorOf(req);
+          const out = await publishMap(deps.repo, deps.store, {
+            ctx: actor,
+            tenantSlug: actor.tenantSlug,
+            mapId: req.params.mapId,
+            artifactBase,
+            maxVersions: limitsOf(actor).maxVersionsPerMap,
+          });
+          if (out.status !== "published") return sendPublish(reply, out);
+          return reply.code(201).send({ status: "published", version: out.version.version, etag: out.version.etag });
         },
-        ...tier("write"),
-      },
-      async (req, reply) => {
-      const actor = actorOf(req);
-
-      // The cheap half of the decision, before the body is even looked at. The
-      // other half needs the map row — whether a contributor owns it — and so
-      // happens inside `applyEdit`, against the row it already holds.
-      if (!can(actor.role, "map:edit")) {
-        return reply.code(403).send({ error: "forbidden" });
-      }
-
-      const body = req.body;
-      if (typeof body.rev !== "number") {
-        // Mandatory, not optional: without it a stale client could clobber an
-        // edit it never saw.
-        return reply.code(400).send({ error: "rev_required" });
-      }
-
-      const out = await deps.repo.applyEdit(
-        actor,
-        req.params.mapId,
-        body.rev,
-        body.put ?? [],
-        body.delete ?? [],
-        { maxFeaturesPerMap: limitsOf(actor).maxFeaturesPerMap },
       );
 
-      switch (out.status) {
-        case "applied":
-          return { rev: out.rev };
-        case "stale":
-          // 409, not 500: the client should re-read and retry.
-          return reply.code(409).send({ error: "stale_revision" });
-        case "not_found":
-          return reply.code(404).send({ error: "not_found" });
-        case "forbidden":
-          // Distinct from 409 on purpose: retrying will never help.
-          return reply.code(403).send({ error: "forbidden", reason: out.reason });
-        case "quota":
-          return quota(reply, out.reason);
-      }
-      },
-    );
-
-    // Shared by publish and rollback, which differ only in what a success is
-    // called.
-    const sendPublish = (
-      reply: FastifyReply,
-      out: Exclude<PublishOutcome, { status: "published" }>,
-    ) => {
-      switch (out.status) {
-        case "unchanged":
-          // 200, not 201: nothing was created.
-          return reply.code(200).send({
-            status: "unchanged",
-            version: out.version,
-            etag: out.etag,
+      scope.post<MapParams & { Body: { toVersion: number } }>(
+        "/maps/:mapId/rollback",
+        {
+          schema: {
+            tags: ["publishing"],
+            summary: "Republish an earlier version as the newest",
+            description: "The ledger is append-only: a rollback is a new version. The draft is left as it is.",
+            security: secured,
+            params: MAP_PARAMS,
+            body: ROLLBACK_BODY,
+          },
+          ...publishTier,
+        },
+        async (req, reply) => {
+          const actor = actorOf(req);
+          const out = await rollbackMap(deps.repo, deps.store, {
+            ctx: actor,
+            tenantSlug: actor.tenantSlug,
+            mapId: req.params.mapId,
+            toVersion: req.body.toVersion,
+            artifactBase,
+            maxVersions: limitsOf(actor).maxVersionsPerMap,
           });
-        case "forbidden":
-          return reply.code(403).send({ error: "forbidden", reason: out.reason });
-        case "not_found":
-          return reply.code(404).send({ error: "not_found" });
-        case "quota":
-          return quota(reply, out.reason);
-      }
-    };
-
-    scope.post<MapParams>(
-      "/maps/:mapId/publish",
-      {
-        schema: {
-          tags: ["publishing"],
-          summary: "Publish the map as a new immutable version",
-          description:
-            "Answers 200 `unchanged` when the content is identical to the " +
-            "newest version, so reader caches stay warm.",
-          security: secured,
-          params: MAP_PARAMS,
+          if (out.status !== "published") return sendPublish(reply, out);
+          return reply.code(201).send({ status: "rolled_back", version: out.version.version });
         },
-        ...publishTier,
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        const out = await publishMap(deps.repo, deps.store, {
-          ctx: actor,
-          tenantSlug: actor.tenantSlug,
-          mapId: req.params.mapId,
-          maxVersions: limitsOf(actor).maxVersionsPerMap,
-        });
-
-        if (out.status !== "published") return sendPublish(reply, out);
-        return reply.code(201).send({
-          status: "published",
-          version: out.version.version,
-          etag: out.version.etag,
-        });
-      },
-    );
-
-    scope.post<MapParams & { Body: { toVersion?: number } }>(
-      "/maps/:mapId/rollback",
-      {
-        schema: {
-          tags: ["publishing"],
-          summary: "Republish an earlier version as the newest",
-          description: "The ledger is append-only: a rollback is a new version.",
-          security: secured,
-          params: MAP_PARAMS,
-          body: ROLLBACK_BODY,
-        },
-        ...publishTier,
-      },
-      async (req, reply) => {
-        const actor = actorOf(req);
-        const toVersion = req.body.toVersion;
-        if (typeof toVersion !== "number" || toVersion < 1) {
-          return reply.code(400).send({ error: "to_version_required" });
-        }
-
-        const out = await rollbackMap(deps.repo, deps.store, {
-          ctx: actor,
-          tenantSlug: actor.tenantSlug,
-          mapId: req.params.mapId,
-          toVersion,
-          maxVersions: limitsOf(actor).maxVersionsPerMap,
-        });
-
-        if (out.status !== "published") return sendPublish(reply, out);
-        return reply
-          .code(201)
-          .send({ status: "rolled_back", version: out.version.version });
-      },
-    );
-  }, { prefix: API_PREFIX });
+      );
+    },
+    { prefix: API_PREFIX },
+  );
 
   return app;
+}
+
+/** The capabilities the front end's `Session` carries; the rest of the grid stays on the server. */
+const SESSION_CAPABILITIES: Session["capabilities"] = ["map:read", "map:create", "map:edit", "map:publish", "map:archive"];
+
+/** Every refusal, in the one error shape, with `Retry-After` mirrored into the body. */
+function refuse(
+  reply: FastifyReply,
+  status: number,
+  error: ApiErrorCode,
+  reason: string,
+  extra: { readonly retryAfter?: number; readonly current?: ErrorBody["current"] } = {},
+) {
+  const body: ErrorBody = { error, reason };
+  if (extra.retryAfter !== undefined) {
+    reply.header("retry-after", extra.retryAfter);
+    body.retryAfter = extra.retryAfter;
+  }
+  if (extra.current) body.current = extra.current;
+  return reply.code(status).send(body);
 }
 
 /** Fixed-actor resolver for local development and tests. Never for production. */
 export class StaticAuth implements AuthResolver {
   constructor(private readonly actor: Actor | null) {}
-  async resolve(): Promise<Actor | null> {
+  async resolve(): Promise<AuthResult> {
     return this.actor;
   }
 }
