@@ -22,19 +22,19 @@ function grown(box: Box, by: number): Box {
   return { minX: box.minX - by, minY: box.minY - by, maxX: box.maxX + by, maxY: box.maxY + by };
 }
 
-/** Moves a box's centre the least distance that keeps the whole box inside `[EDGE, size − EDGE]`. */
-function clampAxis(centre: number, low: number, high: number, size: number): number {
+/** Moves a box's centre the least distance that keeps the whole box inside `[start + EDGE, end − EDGE]`. */
+function clampAxis(centre: number, low: number, high: number, start: number, end: number): number {
   const before = centre - low;
   const after = high - centre;
-  if (high - low > size - 2 * EDGE) return EDGE + before;
-  return Math.max(EDGE + before, Math.min(size - EDGE - after, centre));
+  if (high - low > end - start - 2 * EDGE) return start + EDGE + before;
+  return Math.max(start + EDGE + before, Math.min(end - EDGE - after, centre));
 }
 
 /**
  * The smallest move that takes `box` clear of `obstacle` and keeps it inside
  * the frame, or null when there is none.
  */
-function stepAside(box: Box, obstacle: Box, view: View): { x: number; y: number } | null {
+function stepAside(box: Box, obstacle: Box, frame: Box): { x: number; y: number } | null {
   const moves = [
     { x: obstacle.minX - GAP - box.maxX, y: 0 },
     { x: obstacle.maxX + GAP - box.minX, y: 0 },
@@ -42,7 +42,10 @@ function stepAside(box: Box, obstacle: Box, view: View): { x: number; y: number 
     { x: 0, y: obstacle.maxY + GAP - box.minY },
   ].filter(
     (move) =>
-      box.minX + move.x >= EDGE && box.maxX + move.x <= view.width - EDGE && box.minY + move.y >= EDGE && box.maxY + move.y <= view.height - EDGE,
+      box.minX + move.x >= frame.minX + EDGE &&
+      box.maxX + move.x <= frame.maxX - EDGE &&
+      box.minY + move.y >= frame.minY + EDGE &&
+      box.maxY + move.y <= frame.maxY - EDGE,
   );
   moves.sort((a, b) => Math.abs(a.x) + Math.abs(a.y) - (Math.abs(b.x) + Math.abs(b.y)));
   return moves[0] ?? null;
@@ -66,8 +69,13 @@ export class NarrowAnnotations {
     return this.collapsed.has(id);
   }
 
-  /** Rewrites the annotation shapes of one view in place; run before labels are placed. */
-  apply(drawn: readonly Laid[], view: View, obstacles: readonly Box[]): void {
+  /**
+   * Rewrites the annotation shapes of one view in place; run before labels
+   * are placed. `frame` is the map's frame in the shapes' coordinates; by
+   * default the view itself. Shapes laid out for an earlier view at the same
+   * zoom pass the current frame shifted into that view's coordinates.
+   */
+  apply(drawn: readonly Laid[], view: View, obstacles: readonly Box[], frame: Box = { minX: 0, minY: 0, maxX: view.width, maxY: view.height }): void {
     this.collapsed = new Set();
     /* A wide map only keeps notes inside its frame; wrapping tighter and giving way are for phones. */
     const narrow = view.width < NARROW_WIDTH;
@@ -85,13 +93,13 @@ export class NarrowAnnotations {
       const wanted = view.project(geometry.textAt, worldWrap(item, view));
       const around = textBox(block, wanted);
       const centre = {
-        x: clampAxis(wanted.x, around.minX, around.maxX, view.width),
-        y: clampAxis(wanted.y, around.minY, around.maxY, view.height),
+        x: clampAxis(wanted.x, around.minX, around.maxX, frame.minX, frame.maxX),
+        y: clampAxis(wanted.y, around.minY, around.maxY, frame.minY, frame.maxY),
       };
       for (const obstacle of obstacles) {
         const box = textBox(block, centre);
         if (!boxesOverlap(box, obstacle)) continue;
-        const move = stepAside(box, obstacle, view);
+        const move = stepAside(box, obstacle, frame);
         if (move) {
           centre.x += move.x;
           centre.y += move.y;

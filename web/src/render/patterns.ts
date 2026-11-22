@@ -1,9 +1,9 @@
 import type { FillPattern } from "@/model/types";
 
 /** Pattern tiles are drawn once per colour, pattern and pixel ratio, then reused for every fill. */
-const TILE = 8;
+export const TILE = 8;
 
-function drawTile(pattern: Exclude<FillPattern, "none">, color: string, pixelRatio: number): HTMLCanvasElement {
+export function drawTile(pattern: Exclude<FillPattern, "none">, color: string, pixelRatio: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = Math.round(TILE * pixelRatio);
   const context = canvas.getContext("2d");

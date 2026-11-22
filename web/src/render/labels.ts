@@ -180,6 +180,8 @@ export class LabelPlacer {
   private readonly pinned: boolean;
   /** Screen rectangles covered by furniture, in CSS pixels from the map's top-left corner. */
   private obstacles: readonly Box[] = [];
+  /** The same rectangles in the coordinates of the shapes being placed (see `apply`). */
+  private placedObstacles: readonly Box[] = [];
 
   constructor(hints: ReadonlyMap<string, number> | null = null, options: { pinned?: boolean } = {}) {
     this.hints = hints;
@@ -201,13 +203,22 @@ export class LabelPlacer {
    * Places every label in `entries` (ascending draw order) and writes the
    * result onto the shapes. `key` names everything a decision depends on
    * apart from panning; while it is unchanged the stored decisions are reused.
+   *
+   * `shift` is where the map's top-left corner is in the shapes'
+   * coordinates: zero for shapes of the current view, and for shapes kept
+   * from an earlier view at the same zoom, minus how far the map has panned
+   * since. Furniture is fixed to the screen, so it moves by the same amount.
    */
-  apply(entries: readonly LabelEntry[], key: string, priority: ReadonlySet<string>): void {
+  apply(entries: readonly LabelEntry[], key: string, priority: ReadonlySet<string>, shift: Pt = { x: 0, y: 0 }): void {
+    this.placedObstacles =
+      shift.x === 0 && shift.y === 0
+        ? this.obstacles
+        : this.obstacles.map((box) => ({ minX: box.minX + shift.x, minY: box.minY + shift.y, maxX: box.maxX + shift.x, maxY: box.maxY + shift.y }));
     if (key !== this.key) {
       this.decide(entries, priority);
       this.key = key;
     }
-    const covered = this.obstacles.length > 0 ? this.avoidFurniture(entries, priority) : null;
+    const covered = this.placedObstacles.length > 0 ? this.avoidFurniture(entries, priority) : null;
     for (const entry of entries) {
       const { shape, block } = entry;
       if (shape.kind === "annotation" || !block) continue;
@@ -250,12 +261,12 @@ export class LabelPlacer {
       const box = this.decidedBox(entry);
       if (!box) continue;
       boxes.set(entry.id, box);
-      if (!priority.has(entry.id) && this.obstacles.some((obstacle) => boxesOverlap(box, obstacle))) clashing.push(entry);
+      if (!priority.has(entry.id) && this.placedObstacles.some((obstacle) => boxesOverlap(box, obstacle))) clashing.push(entry);
     }
     if (clashing.length === 0) return null;
 
     const index = new BoxIndex();
-    for (const obstacle of this.obstacles) index.add(obstacle, FURNITURE);
+    for (const obstacle of this.placedObstacles) index.add(obstacle, FURNITURE);
     for (const { id, shape } of entries) {
       if (shape.kind === "annotation" && shape.text) index.add(shape.text.box, id);
       if (shape.kind === "point") index.add(boxAround(shape.centre, shape.radius + 1), id);
@@ -294,7 +305,7 @@ export class LabelPlacer {
     const next = new Map<string, number>();
 
     /* What labels must yield to: the furniture, annotation boxes where their authors put them, and every disc. */
-    for (const obstacle of this.obstacles) index.add(obstacle, FURNITURE);
+    for (const obstacle of this.placedObstacles) index.add(obstacle, FURNITURE);
     for (const { id, shape } of entries) {
       if (shape.kind === "annotation" && shape.text) index.add(shape.text.box, id);
       if (shape.kind === "point") index.add(boxAround(shape.centre, shape.radius + 1), id);

@@ -1,4 +1,4 @@
-import type { IconId, LngLat, MapFeature, MapSettings, PaletteSlot, Viewport } from "@/model/types";
+import type { DashStyle, IconId, LngLat, MapFeature, MapSettings, PaletteSlot, Viewport } from "@/model/types";
 import type { Box } from "@/render/geo";
 import { base, FIXTURE_VIEWPORT, fixtureFeatures, fixtureSettings, ICONS } from "./fixtures";
 
@@ -34,7 +34,7 @@ function catalogue(): MapFeature[] {
 
   /* Row 0: areas, every pattern against every outline dash, one with a hole. */
   const patterns = ["none", "hatch", "cross", "dots"] as const;
-  const dashes = ["solid", "dashed", "dotted", { custom: [10, 3, 2, 3] }] as const;
+  const dashes: DashStyle[] = ["solid", "dashed", "dotted", { custom: [10, 3, 2, 3] }];
   patterns.forEach((pattern, index) => {
     const [x, y] = at(index * 2, 0);
     const ring: LngLat[] = [
@@ -75,7 +75,7 @@ function catalogue(): MapFeature[] {
   }
 
   /* Row 1: lines, every dash at three widths; weak colours are cased. */
-  const lineDashes = ["solid", "dashed", "dotted", { custom: [12, 4, 2, 4] }] as const;
+  const lineDashes: DashStyle[] = ["solid", "dashed", "dotted", { custom: [12, 4, 2, 4] }];
   lineDashes.forEach((dash, index) => {
     [1, 3, 7].forEach((width, step) => {
       const [x, y] = at(index * 2, 1, 0, -step * 0.07);
@@ -268,8 +268,8 @@ function closeUp(): MapFeature[] {
       ...base("close-long", "c", "A line hundreds of kilometres long"),
       kind: "line",
       path: [
-        [c[0] - 3, c[1] - d * 2],
-        [c[0] + 3, c[1] - d * 2.4],
+        [c[0] - 3, c[1] - d * 1.1],
+        [c[0] + 3, c[1] - d * 1.4],
       ],
       stroke: { color: { slot: 4 }, width: 3, opacity: 1, dash: "dotted" },
     },

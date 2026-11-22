@@ -17,6 +17,8 @@ export interface View {
   readonly key: string;
   /** Mercator x of the view centre, for choosing the nearest world copy. */
   readonly centreX: number;
+  /** The view centre in mercator world units. */
+  readonly origin: Pt;
   readonly zoom: number;
   readonly bearing: number;
   readonly pitch: number;
@@ -45,6 +47,7 @@ export function readView(map: MapLibreMap): View {
       scale,
       key,
       centreX: origin.x,
+      origin,
       zoom,
       bearing,
       pitch,
@@ -82,6 +85,7 @@ export function readView(map: MapLibreMap): View {
     scale,
     key,
     centreX: origin.x,
+    origin,
     zoom,
     bearing,
     pitch,
