@@ -14,7 +14,7 @@
 
 import Fastify from "fastify";
 import pg from "pg";
-import { buildVersion, pointerCachePolicy, versionedCachePolicy, etagFor } from "../packages/core/src/index.ts";
+import { buildArtifact, canonicalJson, etagFor, POINTER_CACHE_CONTROL, publishHash, VERSION_CACHE_CONTROL } from "@livemap/core";
 import { PostgresRepo } from "../packages/api/src/postgres.ts";
 import { RealtimeHub } from "../packages/api/src/realtime.ts";
 
@@ -32,12 +32,14 @@ await admin.connect();
 const { rows } = await admin.query(
   `select m.id as map_id, m.tenant_id, m.created_by
      from maps m join tenants t on t.id = m.tenant_id
-    where t.slug = 'bench' and m.slug = 'bench'`,
+    where t.slug = 'bench'
+    order by m.created_at
+    limit 1`,
 );
 await admin.end();
 
 if (rows.length === 0) {
-  console.error("no bench map found — run: node --import tsx bench/seed.mjs");
+  console.error("no bench map found — run: npm run bench:seed");
   process.exit(1);
 }
 const { map_id: MAP_ID, tenant_id: TENANT_ID } = rows[0];
@@ -53,20 +55,19 @@ const repo = new PostgresRepo({
 });
 
 // Build the artifact once at boot, exactly as the publish pipeline would.
+// The publish time is pinned so the artifact is byte-stable across restarts
+// and the ETag does not change just because the process was restarted mid-run.
+const PINNED_AT = "2026-11-16T00:00:00.000Z";
+
+function artifactOf(loaded) {
+  const { map, features } = loaded;
+  return buildArtifact({ mapId: map.id, title: map.title, uiDir: map.uiDir, settings: map.settings, features }, 1, PINNED_AT);
+}
+
 async function rebuild() {
-  const doc = await repo.getMap(CTX, MAP_ID);
-  const features = await repo.listFeatures(CTX, MAP_ID);
-  const version = buildVersion({
-    doc,
-    features,
-    version: 1,
-    publishedBy: doc.id,
-    // Pinned so the artifact is byte-stable across restarts and the ETag does
-    // not change just because the process was restarted mid-run.
-    publishedAt: "2026-11-16T00:00:00.000Z",
-  });
-  const body = JSON.stringify(version);
-  return { body, etag: etagFor(version.etag), featureCount: features.length };
+  const loaded = await repo.getMap(CTX, MAP_ID);
+  const version = artifactOf(loaded);
+  return { body: canonicalJson(version), etag: etagFor(publishHash(version)), featureCount: version.features.length };
 }
 
 let artifact = await rebuild();
@@ -85,16 +86,9 @@ app.get("/ready", async (_req, reply) => {
 // Scenario A — the read path touches the database on every request.
 app.get("/bench/db/:mapId", async (req, reply) => {
   counters.db++;
-  const doc = await repo.getMap(CTX, req.params.mapId);
-  if (!doc) return reply.code(404).send({ error: "not_found" });
-  const features = await repo.listFeatures(CTX, req.params.mapId);
-  const version = buildVersion({
-    doc,
-    features,
-    version: 1,
-    publishedBy: doc.id,
-    publishedAt: "2026-11-16T00:00:00.000Z",
-  });
+  const loaded = await repo.getMap(CTX, req.params.mapId);
+  if (!loaded) return reply.code(404).send({ error: "not_found" });
+  const version = artifactOf(loaded);
   return reply
     .code(200)
     .header("content-type", "application/json")
@@ -105,7 +99,7 @@ app.get("/bench/db/:mapId", async (req, reply) => {
 // Scenario B — immutable prebuilt artifact with real conditional requests.
 app.get("/bench/artifact/:mapId", async (req, reply) => {
   counters.artifact++;
-  const policy = versionedCachePolicy(artifact.etag);
+  const policy = { cacheControl: VERSION_CACHE_CONTROL };
 
   if (req.headers["if-none-match"] === artifact.etag) {
     counters.notModified++;
@@ -127,7 +121,7 @@ app.get("/bench/artifact/:mapId", async (req, reply) => {
 
 // The short-TTL pointer readers resolve first.
 app.get("/bench/latest/:mapId", async (_req, reply) => {
-  const policy = pointerCachePolicy(artifact.etag);
+  const policy = { cacheControl: POINTER_CACHE_CONTROL };
   return reply
     .code(200)
     .header("cache-control", policy.cacheControl)

@@ -2,11 +2,12 @@
 // Seeds a tenant, a user, a membership, a map and N features, then prints the
 // ids and a signed token the load tests use.
 //
-//   node --import tsx bench/seed.mjs [featureCount]
+//   node --conditions=livemap-source --import tsx bench/seed.mjs [featureCount]
 
 import pg from "pg";
 import { PostgresRepo } from "../packages/api/src/postgres.ts";
 import { signSession } from "../packages/api/src/auth.ts";
+import { keysBetween, templateSettings } from "@livemap/core";
 
 const FEATURES = Number(process.argv[2] ?? 250);
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -45,17 +46,6 @@ await admin.query(
   [tenantId, userId],
 );
 
-const { rows: mRows } = await admin.query(
-  `insert into maps (tenant_id, slug, title, title_dir, ui_dir, center, zoom,
-                     basemap_style_id, label_langs, created_by)
-   values ($1, 'bench', 'خريطة الاختبار', 'rtl', 'rtl',
-           ST_GeogFromText('SRID=4326;POINT(31.24 30.05)'), 9,
-           'livemap-base', array['ar','en'], $2)
-   returning id`,
-  [tenantId, userId],
-);
-const mapId = mRows[0].id;
-
 await admin.end();
 
 // Feature writes go through the repo so the geometry/props codec and the
@@ -68,95 +58,78 @@ const repo = new PostgresRepo({ connectionString: APP_DATABASE_URL, max: 4 });
 // every write rather than silently widening one.
 const ctx = { tenantId, userId, role: "editor" };
 
-const stroke = { color: "#c1121f", width: 2, opacity: 1 };
-const labelStyle = {
-  color: "#111111",
-  haloColor: "#ffffff",
-  haloWidth: 1.4,
-  size: 13,
-};
+// The map goes through the repo too: created from a template, so its settings
+// are real ones, and written by the editor the token belongs to.
+const created = await repo.createMap(
+  ctx,
+  { title: { value: "خريطة الاختبار", dir: "rtl" }, uiDir: "rtl", settings: templateSettings("conflict-tracker", "rtl") },
+  { maxMaps: 1000 },
+);
+if (created.status !== "created") throw new Error(`could not create the bench map: ${created.reason}`);
+const mapId = created.map.id;
+
+const stroke = (slot, dash = "solid") => ({ color: { slot }, width: 2, opacity: 1, dash });
+const labelStyle = { color: "ink", size: 13, weight: 400, halo: true, box: false };
 
 function makeFeatures(n) {
+  const orders = keysBetween(null, null, n);
   const out = [];
   for (let i = 0; i < n; i++) {
     const lng = 31.0 + (i % 40) * 0.012;
     const lat = 29.9 + Math.floor(i / 40) * 0.012;
-    const at = String(i).padStart(6, "0");
+    const base = {
+      id: `f-${i}`,
+      order: orders[i],
+      name: { value: `عنصر ${i}`, dir: "rtl" },
+      groupId: null,
+      hidden: false,
+      locked: false,
+      presetId: null,
+      validFrom: null,
+      validTo: null,
+      lineageId: null,
+    };
     const kind = i % 5;
-
     if (kind === 0) {
       out.push({
-        id: `area-${i}`,
+        ...base,
         kind: "area",
-        at,
-        rings: [
-          [
-            [lng, lat],
-            [lng + 0.01, lat],
-            [lng + 0.01, lat + 0.01],
-            [lng, lat + 0.01],
-            [lng, lat],
-          ],
-        ],
-        fill: { color: "#e5383b", opacity: 0.35 },
-        stroke,
+        rings: [[[lng, lat], [lng + 0.01, lat], [lng + 0.01, lat + 0.01], [lng, lat + 0.01], [lng, lat]]],
+        fill: { color: { slot: 1 }, opacity: 0.35, pattern: i % 2 === 0 ? "hatch" : "none" },
+        stroke: stroke(1),
       });
     } else if (kind === 1) {
       out.push({
-        id: `arrow-${i}`,
+        ...base,
         kind: "arrow",
-        at,
-        control: [
-          [lng, lat],
-          [lng + 0.02, lat + 0.01],
-          [lng + 0.04, lat],
-        ],
+        control: [[lng, lat], [lng + 0.02, lat + 0.01], [lng + 0.04, lat]],
         curvature: 0.6,
         head: "single",
-        stroke,
-        chevrons: i % 2 === 0,
+        tapered: i % 2 === 0,
+        stroke: stroke(2),
       });
     } else if (kind === 2) {
       out.push({
-        id: `front-${i}`,
+        ...base,
         kind: "frontline",
-        at,
-        path: [
-          [lng, lat],
-          [lng + 0.03, lat + 0.005],
-          [lng + 0.05, lat],
-        ],
+        path: [[lng, lat], [lng + 0.03, lat + 0.005], [lng + 0.05, lat]],
         facing: i % 2 === 0 ? "left" : "right",
-        stroke,
-        toothSpacing: 900,
-        toothSize: 450,
+        toothShape: "triangle",
+        toothSpacing: 18,
+        toothSize: 7,
+        stroke: stroke(1, "dashed"),
       });
     } else if (kind === 3) {
-      out.push({
-        id: `pt-${i}`,
-        kind: "point",
-        at,
-        at_: [lng, lat],
-        icon: "ocha:Refugee",
-        iconColor: "#ffffff",
-        iconSize: 1,
-        disc: { fill: "#780000", ring: "#ffffff" },
-      });
+      out.push({ ...base, kind: "point", at: [lng, lat], symbol: { icon: "camp" }, color: { slot: 4 }, size: 22 });
     } else {
       out.push({
-        id: `note-${i}`,
+        ...base,
         kind: "annotation",
-        at,
         anchor: [lng, lat],
-        offset: [40, -30],
+        textAt: [lng + 0.006, lat + 0.004],
         text: { value: `ملاحظة ${i}`, dir: "rtl" },
         labelStyle,
-        leader: {
-          color: "#333333",
-          width: 1.2,
-          shape: i % 2 === 0 ? "elbow" : "straight",
-          anchorDot: true,
-        },
+        leader: { shape: i % 2 === 0 ? "elbow" : "straight", anchorDot: true },
       });
     }
   }
@@ -170,7 +143,7 @@ const BATCH = 100;
 let rev = 0;
 for (let i = 0; i < features.length; i += BATCH) {
   const slice = features.slice(i, i + BATCH);
-  const out = await repo.applyEdit(ctx, mapId, rev, slice, []);
+  const out = await repo.applyEdit(ctx, mapId, { rev, force: false, put: slice, delete: [] }, { maxFeaturesPerMap: 100_000 });
   if (out.status !== "applied") {
     throw new Error(
       `seed write rejected at rev ${rev}: ${out.status}${out.reason ? ` — ${out.reason}` : ""}`,
@@ -179,7 +152,7 @@ for (let i = 0; i < features.length; i += BATCH) {
   rev = out.rev;
 }
 
-const readBack = await repo.listFeatures(ctx, mapId);
+const readBack = (await repo.getMap(ctx, mapId)).features;
 await repo.close();
 
 const token = signSession(
