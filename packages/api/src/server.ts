@@ -147,6 +147,8 @@ export interface ServerDeps {
    * or a refresh lands in the client router rather than on a 404.
    */
   readonly appDir?: string;
+  /** A published map the sign-in page shows as an example, as `tenant/map` slugs. */
+  readonly specimen?: { readonly tenantSlug: string; readonly mapSlug: string };
   /** Place search for the editor. Defaults to the built-in gazetteer. */
   readonly places?: PlaceSearch;
 }
@@ -410,6 +412,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     async (_req, reply) => {
       const config: AppConfig = {
         artifactBase,
+        specimen: deps.specimen ?? null,
         guestSignup: Boolean(deps.guests),
         humanCheckSiteKey: deps.guests?.humanCheckSiteKey ?? null,
         guest: deps.guests

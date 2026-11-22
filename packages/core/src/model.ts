@@ -345,6 +345,8 @@ export interface AppConfig {
   humanCheckSiteKey: string | null;
   /** What a guest workspace allows, so the sign-in page states the server's numbers; null when guest signup is off. */
   guest: GuestTerms | null;
+  /** A published map the sign-in page shows as an example of what the tool makes; null for none. */
+  specimen: { tenantSlug: string; mapSlug: string } | null;
 }
 
 export interface GuestTerms {

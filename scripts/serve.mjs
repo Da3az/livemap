@@ -164,6 +164,17 @@ try {
   process.exit(1);
 }
 
+// The published map the sign-in page shows as an example, as "tenant/map".
+const specimen = (() => {
+  const [tenantSlug, mapSlug, extra] = (env.SPECIMEN_MAP ?? "").split("/");
+  if (!env.SPECIMEN_MAP) return null;
+  if (!tenantSlug || !mapSlug || extra !== undefined) {
+    console.error('SPECIMEN_MAP must look like "tenant-slug/map-slug"');
+    process.exit(1);
+  }
+  return { tenantSlug, mapSlug };
+})();
+
 const app = buildServer({
   repo,
   store,
@@ -190,6 +201,7 @@ const app = buildServer({
   servePublic,
   docs: true,
   ...(appDir ? { appDir } : {}),
+  ...(specimen ? { specimen } : {}),
   ...(env.PUBLIC_ARTIFACT_BASE
     ? { publicArtifactBase: env.PUBLIC_ARTIFACT_BASE }
     : {}),

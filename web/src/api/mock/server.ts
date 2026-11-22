@@ -72,6 +72,7 @@ export const server: Sync<ApiClient> = {
     const { switches } = getWorld();
     return {
       artifactBase: ARTIFACT_BASE,
+      specimen: { tenantSlug: "al-mashriq", mapSlug: "turkiye-syria-earthquakes-aid" },
       guestSignup: switches.guestSignup,
       humanCheckSiteKey: switches.humanCheck ? HUMAN_CHECK_SITE_KEY : null,
       guest: switches.guestSignup

@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router";
+import type { ApiClient } from "@/api/client";
 import { AppProviders } from "@/app/providers";
 import { router } from "@/app/router";
 import "./index.css";
@@ -8,15 +9,26 @@ import "./index.css";
 const root = createRoot(document.getElementById("root")!);
 
 /*
- * The mock API, with its seed maps and gazetteer, is a chunk of its own that
- * loads beside the first screen's code rather than inside the main bundle.
- * INTEGRATION.md describes replacing it with an HTTP client.
+ * Which API the app talks to. A production build always uses the server
+ * (packages/api, same origin unless VITE_API_BASE says otherwise), and the
+ * mock is not even in it. `npm run dev` uses the in-memory mock, with its seed
+ * maps, personas and the /dev/states gallery; `VITE_API=http npm run dev`
+ * talks to a running server through the dev proxy instead.
  */
-import("@/api/mock")
-  .then(({ createMockApiClient }) => {
+async function createApi(): Promise<ApiClient> {
+  if (import.meta.env.DEV && import.meta.env.VITE_API !== "http") {
+    const { createMockApiClient } = await import("@/api/mock");
+    return createMockApiClient();
+  }
+  const { createHttpApiClient } = await import("@/api/http");
+  return createHttpApiClient(import.meta.env.VITE_API_BASE ?? "");
+}
+
+createApi()
+  .then((api) => {
     root.render(
       <StrictMode>
-        <AppProviders api={createMockApiClient()}>
+        <AppProviders api={api}>
           <RouterProvider router={router} />
         </AppProviders>
       </StrictMode>,

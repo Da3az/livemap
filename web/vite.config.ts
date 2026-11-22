@@ -13,7 +13,18 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
     dedupe: ["react", "react-dom", "maplibre-gl"],
   },
-  server: { port: 5180, strictPort: true },
+  server: {
+    port: 5180,
+    strictPort: true,
+    /*
+     * With VITE_API=http the app calls a running server (npm run serve) at the
+     * same origin, as it does in production; these paths are passed through.
+     * LIVEMAP_API says where that server listens.
+     */
+    proxy: Object.fromEntries(
+      ["/api", "/auth", "/config", "/public", "/docs"].map((path) => [path, { target: process.env.LIVEMAP_API ?? "http://127.0.0.1:8787", changeOrigin: false }]),
+    ),
+  },
   preview: { port: 5181, strictPort: true },
   build: {
     rolldownOptions: {

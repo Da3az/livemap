@@ -1,12 +1,10 @@
-import { usePublished } from "@/api/hooks";
+import { useConfig, usePublished } from "@/api/hooks";
 import { useTheme } from "@/app/providers";
 import { StateBadge } from "@/components/state-badge";
 import { formatAbsolute } from "@/components/time";
 import { useShellStrings } from "@/i18n/shell";
 import type { RichText } from "@/model/types";
 import { BasemapAttribution, MapViewer } from "@/screens/embed/viewer";
-
-const SPECIMEN = { tenant: "al-mashriq", map: "turkiye-syria-earthquakes-aid" } as const;
 
 function Caption({ text, className }: { text: RichText; className?: string }) {
   return (
@@ -18,9 +16,15 @@ function Caption({ text, className }: { text: RichText; className?: string }) {
 
 /** A live published map under the forms: what the product makes, before signing in. */
 export function PublishedSpecimen() {
+  const specimen = useConfig().data?.specimen ?? null;
+  /* The server names the map to show (SPECIMEN_MAP); without one the page has no picture. */
+  return specimen ? <Specimen tenantSlug={specimen.tenantSlug} mapSlug={specimen.mapSlug} /> : <div aria-hidden="true" className="mt-10 border-t border-rule-strong" />;
+}
+
+function Specimen({ tenantSlug, mapSlug }: { tenantSlug: string; mapSlug: string }) {
   const t = useShellStrings();
   const { mode } = useTheme();
-  const published = usePublished(SPECIMEN.tenant, SPECIMEN.map);
+  const published = usePublished(tenantSlug, mapSlug);
 
   /* Waiting holds the picture's place quietly; a failure or an unpublished map leaves only the rule. */
   if (published.isPending) return <div aria-hidden="true" className="mt-10 h-80 border-t border-rule-strong md:h-96 xl:h-128" />;
