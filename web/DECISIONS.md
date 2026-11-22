@@ -104,7 +104,7 @@ Four read-only reviews of the plan found blockers; the user accepted every recom
 | # | Question | Taken | Why |
 |---|---|---|---|
 | I.1 | When to remove the four old packages | First, right after copying out the iframe protocol, the poller's backoff and the Turnstile loader | Changing `core` to the new model would otherwise have meant keeping four dead packages compiling against it. Removed only after a repository search showed no importers outside them; `demo/` was rebuilt on web/ |
-| I.2 | Where templates and the gazetteer live | In `@livemap/core`, used by the server and by the mock | One copy each; the mock offers exactly what the server does |
+| I.2 | Where templates live | In `@livemap/core`, used by the server and by the mock | One copy; the mock offers exactly what the server does |
 | I.3 | An artifact's features carry no `updatedAt`/`updatedBy`, but the drawing, legend and diff code take `MapFeature` | The front end's `MapVersion` holds whole features; the client converts at its boundary (`fromArtifact`) | Keeps the published artifact free of editor data without widening every drawing signature |
 | I.4 | What the reader sends as `If-None-Match` | The pointer's HTTP `ETag`, not the etag in its body | An object store computes its own validator; the body's etag is the artifact's |
 | I.5 | The harvested iframe height protocol against an embed that fills its frame | The frame reports only when its content overflows; the host only grows the frame and validates sender window, origin, shape and bound. The Embed tab's snippet is unchanged; `embed-host.js` is opt-in | Reporting the document's height would echo the frame's own height forever; the snippet is part of the approved design |
@@ -116,3 +116,9 @@ Four read-only reviews of the plan found blockers; the user accepted every recom
 | I.11 | Guest workspace lifetime: 7 days (server) or 24 hours (mock) | The server's 7 days, unchanged; the mock still says 24 hours | **Open — the user's call** |
 | I.12 | How the workspace packages are compiled | From source, through a `livemap-source` export condition (TypeScript, Vite and `node --conditions`) | The front end and the server never run a stale build of `core` |
 | I.13 | The existing API tests, written against the old contract | Left as they are, not run, not edited | The user asked for no tests to be written, and a failing test may not be edited without the user's OK |
+
+## Integration — follow-up (user, 2026-11-22)
+
+| # | Question | Chosen |
+|---|---|---|
+| F.1 | Place search (P1 in RESEARCH.md, accepted in 1.1) needs a geocoder to be useful | **Removed entirely** for now: the editor's search box, the palette's "Go to a place" entries, adding a result as an icon, `searchPlaces`, `/api/v1/places` and the built-in gazetteer. Authors find a place by panning. A geocoder can bring it back later (research kept in the private planning notes) |

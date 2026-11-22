@@ -6,7 +6,6 @@
 import { lazy } from "react";
 
 export { CommandPalette } from "./palette/CommandPalette";
-export { PlaceSearch } from "./place/PlaceSearch";
 
 /* Opened on demand, so loaded on demand: the editor's first paint does not wait for them. */
 export const PreviewPanel = lazy(() => import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })));

@@ -3,7 +3,6 @@ export * from "./r2.js";
 export * from "./authz.js";
 export * from "./limits.js";
 export * from "./repo.js";
-export * from "./places.js";
 export * from "./validate.js";
 export * from "./guests.js";
 export * from "./turnstile.js";

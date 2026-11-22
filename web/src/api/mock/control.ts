@@ -83,7 +83,6 @@ export const MOCK_METHODS: MockMethod[] = [
   "getPublished",
   "getPublishedPointer",
   "getPublishedVersion",
-  "searchPlaces",
 ];
 
 export const MOCK_PERSONAS: PersonaId[] = [

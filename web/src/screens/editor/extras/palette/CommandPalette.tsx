@@ -8,7 +8,6 @@ import { SHORTCUT_SECTIONS, useEditorStore, useEditorStoreApi, type ShortcutSect
 import { useLang } from "@/i18n";
 import { useExtrasStrings } from "@/i18n/editor-extras";
 import { useEditorRuntime } from "../../runtime";
-import { flyTo, usePlaceResults } from "../place/results";
 import { isMac } from "../shared/format";
 import { usePortalContainer } from "../shared/overlay";
 import { buildEntries, featureEntries, type PaletteEntry, type PaletteGroupId } from "./commands";
@@ -30,7 +29,6 @@ const GROUP_ORDER: PaletteGroupId[] = [
   "theme",
   "transfer",
   "features",
-  "places",
 ];
 
 const SECTIONS: readonly string[] = ["tools", "edit", "arrange", "file", "view", "timeline"];
@@ -80,7 +78,6 @@ function Body() {
   const [query, setQuery] = useState("");
   const [recent] = useState(readRecent);
   const folded = fold(query);
-  const places = usePlaceResults(query);
 
   const groups = useMemo(() => {
     const context = {
@@ -104,36 +101,8 @@ function Body() {
       scored.push({ entry, score: score - (folded !== "" && recent.includes(entry.id) ? 0.5 : 0) });
     }
     featureEntries(context, folded).forEach((entry, index) => scored.push({ entry, score: 2 + index / 100 }));
-    places.hits.forEach((hit, index) => {
-      scored.push({
-        score: 2.5 + index / 100,
-        entry: {
-          id: `place:${hit.id}`,
-          group: "places",
-          label: t.goTo(hit.name.value),
-          detail: hit.source === "gazetteer" ? hit.context : strings.place.pasted,
-          haystack: "",
-          memorable: false,
-          run: () => flyTo(runtime.controller, hit),
-        },
-      });
-    });
-    if (places.status === "rate_limited" || places.status === "offline" || places.status === "error") {
-      scored.push({
-        score: 9,
-        entry: {
-          id: "place:unavailable",
-          group: "places",
-          label: t.placeSearch,
-          disabledReason: places.status === "rate_limited" ? t.placesRateLimited : t.placesOffline,
-          haystack: "",
-          memorable: false,
-          run: () => undefined,
-        },
-      });
-    }
     return group(scored, recent, folded !== "");
-  }, [state, store, api, runtime, lang, mac, t, strings, choice, setChoice, navigate, folded, recent, places.hits, places.status]);
+  }, [state, store, api, runtime, lang, mac, t, strings, choice, setChoice, navigate, folded, recent]);
 
   const run = (entry: PaletteEntry): void => {
     store.setPaletteOpen(false);
@@ -191,7 +160,7 @@ function Body() {
                     {entry.disabledReason !== undefined ? <span className="text-xs text-ink-3">{entry.disabledReason}</span> : null}
                     {entry.checked === true ? <span className="text-xs font-medium text-survey">{t.current}</span> : null}
                     {mixed && entry.checked !== true && entry.current !== undefined ? <span className="text-xs text-ink-3">{t.now(entry.current)}</span> : null}
-                    {mixed && entry.group !== "places" && entry.group !== "features" ? (
+                    {mixed && entry.group !== "features" ? (
                       <span data-palette-section className="rounded-key border border-rule px-1 text-2xs text-ink-2">
                         {heading(entry.group)}
                       </span>
@@ -214,7 +183,7 @@ function Body() {
 }
 
 /**
- * Every command by name: the shortcut table, plus places, features, styles,
+ * Every command by name: the shortcut table, plus features, styles,
  * basemap, language, direction, theme, preview, versions and export. Opened
  * by the store's `paletteOpen`.
  */

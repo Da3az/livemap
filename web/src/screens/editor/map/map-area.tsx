@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { formatShortcut, selectCounts, shallowEqual, shortcutFor, useEditorStore, useEditorStoreApi } from "@/editor/store";
 import { useEditorStrings } from "@/i18n/editor";
 import { watchObstacles } from "@/render/obstacles";
-import { PlaceSearch, PreviewPanel } from "@/screens/editor/extras";
+import { PreviewPanel } from "@/screens/editor/extras";
 import { ToolDock } from "../dock/tool-dock";
 import { MessageRail } from "../messages/message-rail";
 import { useEditorRuntime } from "../runtime";
@@ -67,7 +67,7 @@ function PaneTabs({ side }: { side: "start" | "end" }) {
 }
 
 /**
- * The working area: the map, and over it the place search, the published
+ * The working area: the map, and over it the pane tabs, the published
  * map's own furniture, the messages, the zoom controls and the tool dock.
  * The preview covers all of it while open.
  */
@@ -107,9 +107,7 @@ export function MapArea({ mapRef }: { mapRef: (element: HTMLElement | null) => v
       <Furniture bottom={bottom} />
       <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex items-start gap-3">
         <PaneTabs side="start" />
-        <div className="pointer-events-auto mx-auto w-full max-w-md">
-          <PlaceSearch />
-        </div>
+        <div className="flex-1" />
         <PaneTabs side="end" />
       </div>
       <MessageRail />

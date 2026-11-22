@@ -38,7 +38,6 @@ import {
 import type { GuestProvisioner } from "./guests.js";
 import type { HumanCheck } from "./turnstile.js";
 import type { SessionClaims } from "./auth.js";
-import { GazetteerPlaces, type PlaceSearch } from "./places.js";
 import { editProblem } from "./validate.js";
 import {
   CREATE_BODY,
@@ -50,7 +49,6 @@ import {
   LIST_QUERY,
   MAP_PARAMS,
   OK,
-  PLACES_QUERY,
   ROLLBACK_BODY,
 } from "./schemas.js";
 import { DOCS_CSS } from "./docs-theme.js";
@@ -149,8 +147,6 @@ export interface ServerDeps {
   readonly appDir?: string;
   /** A published map the sign-in page shows as an example, as `tenant/map` slugs. */
   readonly specimen?: { readonly tenantSlug: string; readonly mapSlug: string };
-  /** Place search for the editor. Defaults to the built-in gazetteer. */
-  readonly places?: PlaceSearch;
 }
 
 /** Every JSON route lives under this, and nothing under it is reachable without an actor. */
@@ -283,8 +279,15 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       root: deps.appDir,
       // "/" is a client route like any other; the fallback below answers it.
       index: false,
+      // One route per built file rather than a catch-all. A catch-all route
+      // swallows every unmatched path, /api/v1/* included, and hands it to the
+      // page fallback, so an API miss came back as the app's HTML with a 200
+      // instead of the API scope's JSON answer. The build is fixed at start-up,
+      // so not serving files added later costs nothing.
+      wildcard: false,
       // index.html always goes through the fallback, so it always gets the
       // page headers (no-cache, framing) whichever URL asked for it.
+      globIgnore: ["index.html"],
       allowedPath: (pathName) => pathName !== "/index.html",
       // Each response sets its own cache-control below.
       cacheControl: false,
@@ -375,7 +378,6 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   const quota = (reply: FastifyReply, reason: string) => refuse(reply, 403, "quota_exceeded", reason);
   const forbidden = (reply: FastifyReply, reason: string) => refuse(reply, 403, "forbidden", reason);
   const notFound = (reply: FastifyReply) => refuse(reply, 404, "not_found", "There is no such map in this workspace.");
-  const places = deps.places ?? new GazetteerPlaces();
 
   /** What the front end's ledger shows for a version: the ledger row plus where its bytes are and how they are cached. */
   const versionRecord = (row: VersionRow): VersionRecord => ({
@@ -650,15 +652,6 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         "/templates",
         { schema: { tags: ["maps"], summary: "Starting points offered when creating a map", security: secured }, ...tier("read") },
         async () => ({ templates: TEMPLATES }),
-      );
-
-      scope.get<{ Querystring: { q: string; lang?: "ar" | "en" } }>(
-        "/places",
-        {
-          schema: { tags: ["maps"], summary: "Find a place by name, in Arabic or English", security: secured, querystring: PLACES_QUERY },
-          ...tier("read"),
-        },
-        async (req) => ({ places: await places.search(req.query.q, req.query.lang ?? "en") }),
       );
 
       scope.get<{ Querystring: { archived?: "true" | "false" } }>(

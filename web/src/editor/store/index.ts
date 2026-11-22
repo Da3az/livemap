@@ -12,7 +12,7 @@
  * - `useConnectController(controller)` wires the map engine in both directions.
  * - `store.save(api)` / `store.publish(api)` resolve with typed states that
  *   are also in `state.save` / `state.publish`.
- * - `importGeoJson`, `exportGeoJson`, `parseCoordinates` and `diffVersions`
+ * - `importGeoJson`, `exportGeoJson`, `formatCoordinates` and `diffVersions`
  *   are pure and need no store.
  * - `SHORTCUTS` is the one table of commands and keys; `matchShortcut` and
  *   `runCommand` turn a key press into an action.
@@ -110,7 +110,7 @@ export type { ImportOptions, ImportResult, ImportedItem, SkipReason, SkippedItem
 export { PALETTE_HEX, exportGeoJson } from "./geojson-export";
 export type { ExportCollection, ExportFeature, ExportGeometry, ExportOptions } from "./geojson-export";
 
-export { formatCoordinates, parseCoordinates } from "./coordinates";
+export { formatCoordinates } from "./coordinates";
 
 export { ASPECT_LABELS, diffVersions } from "./diff";
 export type { ChangedFeature, DiffFeature, FeatureAspect, SettingArea, SettingChange, VersionDiff } from "./diff";

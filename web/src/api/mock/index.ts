@@ -14,7 +14,6 @@ import { server } from "./server";
 import { getWorld } from "./world";
 
 export { type FailureOverrides, type ForcedFailure, MOCK_METHODS, MOCK_PERSONAS, type MockControl, type MockMethod, mockControl } from "./control";
-export { PLACE_COUNT } from "@livemap/core";
 export { PEOPLE } from "./seed";
 export { MOCK_TOKENS, ROLE_CAPABILITIES } from "./server";
 export { GUEST_LIMITS, MEMBER_LIMITS, type PersonaId } from "./world";
@@ -120,10 +119,6 @@ export function createMockApiClient(): ApiClient {
     async getPublishedVersion(tenantSlug, mapSlug, version) {
       await arrive("getPublishedVersion");
       return structuredClone(server.getPublishedVersion(tenantSlug, mapSlug, version));
-    },
-    async searchPlaces(query, input) {
-      await arrive("searchPlaces");
-      return server.searchPlaces(query, input);
     },
   };
 }

@@ -4,4 +4,3 @@ export * from "./order.js";
 export * from "./settings.js";
 export * from "./version.js";
 export * from "./templates.js";
-export * from "./gazetteer.js";

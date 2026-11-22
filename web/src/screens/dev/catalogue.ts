@@ -274,7 +274,6 @@ interface EditorFixture {
   /** A map someone else created, for a contributor. */
   notOwn: string;
   archived: string;
-  place: string;
   t: {
     back: string;
     settings: string;
@@ -283,7 +282,6 @@ interface EditorFixture {
     importTab: string;
     imageTab: string;
     play: string;
-    placeLabel: string;
     phone: string;
     tablet: string;
     desktop: string;
@@ -309,7 +307,6 @@ const EDITOR: Record<Dir, EditorFixture> = {
     second: "eq-025",
     notOwn: "m_earthquake",
     archived: "m_beirut",
-    place: "Antakya",
     t: {
       back: "Maps",
       settings: "Map settings",
@@ -318,7 +315,6 @@ const EDITOR: Record<Dir, EditorFixture> = {
       importTab: "Import",
       imageTab: "Image",
       play: "Play",
-      placeLabel: "Search for a place",
       phone: "Phone 390",
       tablet: "Tablet 834",
       desktop: "Desktop 1200",
@@ -342,7 +338,6 @@ const EDITOR: Record<Dir, EditorFixture> = {
     second: "sh-037",
     notOwn: "m_shaheen",
     archived: "m_stadiums",
-    place: "مسقط",
     t: {
       back: "الخرائط",
       settings: "إعدادات الخريطة",
@@ -351,7 +346,6 @@ const EDITOR: Record<Dir, EditorFixture> = {
       importTab: "استيراد",
       imageTab: "صورة",
       play: "تشغيل",
-      placeLabel: "ابحث عن مكان",
       phone: "هاتف 390",
       tablet: "لوحي 834",
       desktop: "حاسوب 1200",
@@ -519,12 +513,6 @@ const EDITOR_STATES: StateDef[] = [
   both("furniture-folded", "Furniture folded", "Status bar: Title and key → Folded.", (f) => ({ path: open(f), ready: MAP_READY, map: true, steps: [click(button(f.t.furniture.folded))] }), DESK),
   both("furniture-hidden", "Furniture hidden", "Status bar: Title and key → Hidden.", (f) => ({ path: open(f), ready: MAP_READY, map: true, steps: [click(button(f.t.furniture.hidden))] }), DESK),
   both("timeline-playing", "Timeline playing", "Play on the timeline, shot mid-run.", (f) => ({ path: open(f), ready: MAP_READY, map: true, steps: [click(button(f.t.play)), wait(1200)] }), DESK),
-  both("place-search", "Place search results", "A place name typed into the map's search.", (f) => ({
-    path: open(f),
-    ready: MAP_READY,
-    map: true,
-    steps: [fill({ role: "combobox", name: f.t.placeLabel }, f.place), wait(600)],
-  }), DESK),
   both("command-palette", "Command palette", "Mod+K.", (f) => ({ path: open(f), ready: MAP_READY, map: true, steps: [press("Mod+K"), wait(300)] }), DESK),
   both("shortcut-sheet", "Shortcut sheet", "Shift+/ (?).", (f) => ({ path: open(f), ready: MAP_READY, map: true, steps: [press("Shift+/"), wait(300)] }), DESK),
   both("import-review", "Import review", "Import / Export → Import, a four-feature GeoJSON file chosen.", (f) => ({

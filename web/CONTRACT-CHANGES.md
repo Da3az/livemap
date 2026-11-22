@@ -685,6 +685,6 @@ above, this section wins.
 | 44 Templates | Held by the server (`TEMPLATES` in core); `GET /api/v1/templates` answers `{ templates }`. |
 | 45 Session | `GET /api/v1/session`. `capabilities` holds only the five the interface uses. |
 | 46 Config | `AppConfig` adds `specimen: { tenantSlug, mapSlug } \| null`, the published map the sign-in page shows (server setting `SPECIMEN_MAP`). |
-| 42 Place search | `GET /api/v1/places?q=&lang=` answers `{ places }`, from the built-in gazetteer until a geocoder is chosen. |
+| 42 Place search | **Removed** (user, 2026-11-22): no search box, no `searchPlaces`, no endpoint. |
 | Guest signup | `POST /auth/guest` takes `{ turnstileToken }` and answers `{ token, tenantSlug, expiresAt }`; the client stores the token and asks for the session. Signup switched off answers 403 `guest_signup_disabled`. |
 | List | `GET /api/v1/maps?archived=true\|false` answers `{ maps }`. |

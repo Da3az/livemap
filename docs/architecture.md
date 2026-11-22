@@ -80,8 +80,8 @@ body is `{ version, url, etag, cacheControl, updatedAt }`.
 
 | Package | Depends on | Purpose |
 |---|---|---|
-| `@livemap/core` | **nothing** | The one domain model, the API's request and response shapes, the settings patch, the publish builder and hash, fractional order keys, templates and the gazetteer. Pure, Node- and browser-safe. |
-| `@livemap/api` | core | Fastify routes, JSON Schemas, the publish pipeline, `PostgresRepo`, authz, auth, guests, limits, place search, the R2 store. |
+| `@livemap/core` | **nothing** | The one domain model, the API's request and response shapes, the settings patch, the publish builder and hash, fractional order keys, templates. Pure, Node- and browser-safe. |
+| `@livemap/api` | core | Fastify routes, JSON Schemas, the publish pipeline, `PostgresRepo`, authz, auth, guests, limits, the R2 store. |
 | `@livemap/web` (`web/`) | core | The front end: sign-in, workspace, editor, versions, the embed. React, Vite, MapLibre 6.19. |
 
 **One model, compiled from source by both sides.** `web/src/model/types.ts`
@@ -156,10 +156,7 @@ Stated plainly rather than discovered later:
    `frame-ancestors` (§9). A full policy needs writing against a running
    browser: MapLibre's worker (`worker-src data: blob:` in a sandboxed frame),
    the tile host, the API and artifact origins, and Turnstile.
-8. **Place search answers from a built-in list.** `/api/v1/places` uses the
-   gazetteer in core (about 270 places) until a geocoder is chosen; `PlaceSearch`
-   is the seam.
-9. **The publish pointer and the artifact store are not one transaction.** The
+8. **The publish pointer and the artifact store are not one transaction.** The
    pointer is written under the per-map lock after the artifact (§8), so the
    worst interruption leaves readers on the previous version; an unchanged
    republish rewrites the pointer and heals it.

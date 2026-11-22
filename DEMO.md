@@ -794,7 +794,6 @@ Be straightforward about this. The honesty is part of the pitch.
 | Rate limiting, readiness, error handling | **Real.** |
 | Embed — polling, ETags, sandboxed iframe, auto-height | **Real.** |
 | Load tests | **Real**, and reproducible with one command. |
-| Place search | **Stand-in.** A built-in list of about 270 places until a geocoder is chosen. |
 | Object storage | **Written, not yet run against a bucket.** `R2ArtifactStore` behind the `ArtifactStore` port; without `R2_*` set the server falls back to an in-process store and says so. |
 | Tests | **Not brought forward** from the previous API; essential ones to follow. |
 | Billing | **Not built.** |

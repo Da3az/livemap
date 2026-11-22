@@ -11,7 +11,6 @@ import type {
   MapFeature,
   MapSummary,
   MapVersion,
-  PlaceResult,
   Session,
   TemplateSummary,
   VersionPointer,
@@ -335,10 +334,5 @@ export function createHttpApiClient(baseUrl = ""): ApiClient {
 
     getPublishedPointer,
     getPublishedVersion,
-
-    async searchPlaces(query, input): Promise<PlaceResult[]> {
-      const params = new URLSearchParams({ q: query, lang: input.language });
-      return (await json<{ places: PlaceResult[] }>(`/api/v1/places?${params.toString()}`)).places;
-    },
   };
 }

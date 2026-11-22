@@ -11,14 +11,13 @@ import type {
   MapDoc,
   MapFeature,
   MapSettings,
-  PlaceResult,
   RichText,
   Session,
   Stroke,
   StylePreset,
   Viewport,
 } from "@/model/types";
-import { buildFeature, defaultFeatureName, initialDrawDefaults, type DrawDefaults } from "./defaults";
+import { defaultFeatureName, initialDrawDefaults, type DrawDefaults } from "./defaults";
 import {
   applyPatch,
   changeSet,
@@ -817,21 +816,6 @@ export class EditorStore {
       },
       { select: (result) => ({ ids: result.added, groupId: null }) },
     );
-  }
-
-  /**
-   * Add a place-search result as an icon, named after the place, carrying the
-   * name as its label on the map, and styled from the icon defaults.
-   */
-  addPlace(place: Pick<PlaceResult, "name" | "at">): CommandResult {
-    const built = buildFeature({ kind: "point", at: place.at }, this.state.drawDefaults, {
-      name: place.name,
-      uiDir: this.state.doc.uiDir,
-      now: this.now().toISOString(),
-      userId: this.state.access.userId,
-    });
-    const feature: MapFeature = place.name.value.trim() === "" ? built : { ...built, label: place.name };
-    return this.addOnTop(bi("Add place", "إضافة مكان"), [feature]);
   }
 
   /**

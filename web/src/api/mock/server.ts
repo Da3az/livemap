@@ -12,14 +12,12 @@ import type {
   MapFeature,
   MapSummary,
   MapVersion,
-  PlaceResult,
   Session,
   TemplateSummary,
   VersionPointer,
   VersionRecord,
 } from "@/model/types";
 import { apiError } from "./errors";
-import { searchGazetteer } from "@livemap/core";
 import {
   buildArtifact,
   contentHash,
@@ -331,10 +329,5 @@ export const server: Sync<ApiClient> = {
     const artifact = map ? world.artifacts.get(artifactKey(map.doc.id, version)) : undefined;
     if (!artifact) throw apiError("not_found", { reason: "There is no such version at this address." });
     return artifact;
-  },
-
-  searchPlaces(query, input): PlaceResult[] {
-    requireSession();
-    return searchGazetteer(query, input.language);
   },
 };

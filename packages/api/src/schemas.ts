@@ -376,16 +376,6 @@ export const ROLLBACK_BODY = {
   properties: { toVersion: { type: "integer", minimum: 1 } },
 } as const;
 
-export const PLACES_QUERY = {
-  type: "object",
-  additionalProperties: false,
-  required: ["q"],
-  properties: {
-    q: { type: "string", minLength: 1, maxLength: 200 },
-    lang: { type: "string", enum: ["ar", "en"] },
-  },
-} as const;
-
 /** `ErrorBody` in packages/core/src/api.ts. Every refusal has this shape. */
 export const ERROR = {
   type: "object",

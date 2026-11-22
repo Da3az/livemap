@@ -76,7 +76,7 @@ The editor, at desktop width:
 ```
 ┌ Maps │ Title · Rev.  Undo Redo │ ○ Saved 12:03 [Save] │ Editor Preview │ Import / Export ┃ ( ○ 9 changes not live [Publish] ) History ┐
 ├──────────────┬──────────────────────────────────────────────────────────┬────────────────┤
-│ Features  39 │  [title block]          [place search]        [Map settings]│ Inspector      │
+│ Features  39 │  [title block]                                [Map settings]│ Inspector      │
 │ groups, rows │                                                          │ (or Map        │
 │              │  [key]                                                    │  settings)     │
 │              │              ( next-shape strip )                        │                │

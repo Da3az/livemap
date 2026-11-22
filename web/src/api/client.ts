@@ -4,7 +4,6 @@ import type {
   MapFeature,
   MapSummary,
   MapVersion,
-  PlaceResult,
   RichText,
   Session,
   TemplateSummary,
@@ -89,7 +88,4 @@ export interface ApiClient {
   getPublishedPointer(tenantSlug: string, mapSlug: string, input?: { ifNoneMatch?: string | null }): Promise<PublishedPointerResult>;
   /** One immutable published artifact of a slug, anonymous: fetched once per version the pointer names. */
   getPublishedVersion(tenantSlug: string, mapSlug: string, version: number): Promise<MapVersion>;
-
-  /** Place search. Accepts a name; coordinates are parsed client-side. */
-  searchPlaces(query: string, input: { language: "ar" | "en" }): Promise<PlaceResult[]>;
 }

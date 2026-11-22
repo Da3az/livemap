@@ -104,14 +104,11 @@ fetches the map again. Three behaviours to keep:
 `src/api/mock/` implements the whole `ApiClient` in memory for development and
 for the state gallery: personas and roles, quotas, revisions, guest signup, the
 human check, publishing with the same builder and hash as the server
-(`buildArtifact`, `publishHash` from core), the same artifact key layout, place
-search over the same gazetteer, the same templates, and URL switches to force
+(`buildArtifact`, `publishHash` from core), the same artifact key layout, the same templates, and URL switches to force
 any error. Its seed maps are development data only.
 
 ## Not done
 
-- **Place search uses the built-in gazetteer** (about 270 places) behind the
-  server's `PlaceSearch` seam until a geocoder is chosen.
 - **No Content-Security-Policy beyond framing.** A full policy needs
   `connect-src` for the API, the artifact base, the tile host and Turnstile;
   `worker-src data: blob:` (MapLibre starts its worker from a `data:` URL inside

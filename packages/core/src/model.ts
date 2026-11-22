@@ -355,12 +355,3 @@ export interface GuestTerms {
   maxFeaturesPerMap: number;
   maxVersionsPerMap: number;
 }
-
-export interface PlaceResult {
-  id: string;
-  name: RichText;
-  /** e.g. "Governorate, Oman" */
-  context: string;
-  at: LngLat;
-  bounds: [LngLat, LngLat] | null;
-}

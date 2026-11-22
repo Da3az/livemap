@@ -126,9 +126,9 @@ properties alone.)
 web/                the front end: sign-in, workspace, editor, versions, the embed.
                     React, Vite, MapLibre 6.19.
 packages/core       the one domain model, API shapes, settings patch, publish builder
-                    and hash, order keys, templates, gazetteer. Zero dependencies.
+                    and hash, order keys, templates. Zero dependencies.
 packages/api        routes, schemas, publish pipeline, PostgresRepo, authz, auth,
-                    guests, limits, place search, R2 store.
+                    guests, limits, R2 store.
 
 migrations/         0001–0004 — schema, RLS, roles, document model, version origin.
 scripts/            migrate.mjs, serve.mjs (production entrypoint), dev-workspace.mjs,
@@ -193,8 +193,7 @@ security, HMAC session auth, rate limiting, readiness probes, per-tenant quotas,
 request validation with a generated API reference, and the load tests above.
 
 **Built, not yet run against the real thing:** the R2 artifact store (no bucket
-exists yet). Place search answers from a built-in list of about 270 places until
-a geocoder is chosen.
+exists yet).
 
 **Tests:** the API's test suite was written against the previous contract and
 has not been brought forward; essential tests are to be written once the work

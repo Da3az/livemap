@@ -21,7 +21,7 @@ import { requestTransfer } from "../shared/bus";
 import { downloadGeoJson } from "../transfer/geojson-export";
 import { fold, matchScore } from "./fuzzy";
 
-export type PaletteGroupId = "recent" | "places" | "features" | ShortcutSection | "styles" | "basemap" | "labels" | "direction" | "theme" | "transfer";
+export type PaletteGroupId = "recent" | "features" | ShortcutSection | "styles" | "basemap" | "labels" | "direction" | "theme" | "transfer";
 
 export interface PaletteEntry {
   /** Stable across sessions, so it can be remembered as recent. */

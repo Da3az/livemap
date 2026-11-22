@@ -9,7 +9,6 @@
  * - Refusals are not retried (see `makeQueryClient` in `app/providers.tsx`).
  */
 import {
-  keepPreviousData,
   type QueryClient,
   useMutation,
   type UseMutationResult,
@@ -25,7 +24,6 @@ import type {
   MapFeature,
   MapSummary,
   MapVersion,
-  PlaceResult,
   RichText,
   Session,
   TemplateSummary,
@@ -51,7 +49,6 @@ export const queryKeys = {
   versions: (id: string) => ["maps", "map", id, "versions"] as const,
   version: (id: string, version: number) => ["maps", "map", id, "version", version] as const,
   published: (tenantSlug: string, mapSlug: string) => ["published", tenantSlug, mapSlug] as const,
-  places: (language: "ar" | "en", query: string) => ["places", language, query] as const,
 };
 
 export type MapDetail = { map: MapDoc; features: MapFeature[] };
@@ -151,23 +148,6 @@ export function usePublished(
     enabled: Boolean(tenantSlug) && Boolean(mapSlug),
     refetchInterval: options.pollMs ?? false,
     refetchIntervalInBackground: false,
-  });
-}
-
-/**
- * Place search. Runs for queries of two characters or more, and keeps the
- * previous results on screen while the next ones load. Debounce the input
- * before passing it in.
- */
-export function usePlaceSearch(query: string, language: "ar" | "en"): UseQueryResult<PlaceResult[], ApiError> {
-  const api = useApi();
-  const trimmed = query.trim();
-  return useQuery<PlaceResult[], ApiError>({
-    queryKey: queryKeys.places(language, trimmed),
-    queryFn: () => api.searchPlaces(trimmed, { language }),
-    enabled: trimmed.length >= 2,
-    staleTime: 5 * 60_000,
-    placeholderData: keepPreviousData,
   });
 }
 
