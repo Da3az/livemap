@@ -122,6 +122,16 @@ export function EmbedTab({ map, tenantSlug, liveVersion }: { map: MapDoc; tenant
             onChange={(key) => set({ key: key === "map" ? null : key === "on" })}
           />
           <Segments
+            label={t.panShort}
+            value={options.pan === null ? "map" : options.pan ? "on" : "off"}
+            options={[
+              { id: "map", text: t.panMapShort(setting.panButtons) },
+              { id: "on", text: t.keyOn },
+              { id: "off", text: t.keyOff },
+            ]}
+            onChange={(pan) => set({ pan: pan === "map" ? null : pan === "on" })}
+          />
+          <Segments
             label={t.modeShort}
             value={options.staticPicture ? "picture" : "move"}
             options={[
@@ -175,7 +185,7 @@ export function EmbedTab({ map, tenantSlug, liveVersion }: { map: MapDoc; tenant
             <p className="max-w-prose text-base text-ink-2">{t.previewNothing}</p>
           ) : live.isSuccess ? (
             <div style={frameStyle} className="w-full border border-rule-strong bg-panel">
-              <MapViewer version={live.data} theme={previewTheme} static={options.staticPicture ? true : undefined} legend={options.key ?? undefined} className="size-full" />
+              <MapViewer version={live.data} theme={previewTheme} static={options.staticPicture ? true : undefined} legend={options.key ?? undefined} panButtons={options.pan ?? undefined} className="size-full" />
             </div>
           ) : live.isError ? (
             <p role="alert" className="text-sm text-danger">

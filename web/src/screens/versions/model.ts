@@ -163,10 +163,12 @@ export interface EmbedOptions {
   staticPicture: boolean;
   /** null leaves the key to the map's own setting. */
   key: boolean | null;
+  /** The pan buttons beside the zoom buttons; null leaves them to the map's setting. */
+  pan: boolean | null;
   lazy: boolean;
 }
 
-export const DEFAULT_EMBED: EmbedOptions = { size: { kind: "ratio", ratio: "16/9" }, theme: "map", staticPicture: false, key: null, lazy: true };
+export const DEFAULT_EMBED: EmbedOptions = { size: { kind: "ratio", ratio: "16/9" }, theme: "map", staticPicture: false, key: null, pan: null, lazy: true };
 
 /** The least height that leaves the map room under its title and over its credit; the timeline needs its own strip. */
 export function embedMinHeight(timeline: boolean): number {
@@ -180,6 +182,7 @@ export function embedUrl(origin: string, tenantSlug: string, mapSlug: string, op
   if (options.theme !== "map") params.set("theme", options.theme);
   if (options.staticPicture) params.set("static", "1");
   if (options.key !== null) params.set("legend", options.key ? "1" : "0");
+  if (options.pan !== null) params.set("pan", options.pan ? "1" : "0");
   const query = params.toString();
   return `${origin}/embed/${encodeURIComponent(tenantSlug)}/${encodeURIComponent(mapSlug)}${query ? `?${query}` : ""}`;
 }

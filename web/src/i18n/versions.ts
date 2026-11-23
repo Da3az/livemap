@@ -199,6 +199,8 @@ const en = {
   keyMapShort: (shown: boolean) => `Map's (${shown ? "on" : "off"})`,
   keyOn: "On",
   keyOff: "Off",
+  panShort: "Move buttons",
+  panMapShort: (shown: boolean) => `Map's (${shown ? "on" : "off"})`,
   modeShort: "Reader can",
   modeMove: "Pan and zoom",
   modePicture: "Only look",
