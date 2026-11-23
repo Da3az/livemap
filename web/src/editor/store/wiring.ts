@@ -142,6 +142,12 @@ export function connectController(store: EditorStore, controller: EditorControll
     }
     if (inSync && !holdFeatures) {
       sent.features = selectDrawOrder(store.getState());
+      /*
+       * A commit is answered even when the store took it as sent: the
+       * controller's own copy must become the document, or its held overrides
+       * time out and the map shows the feature as it was before the gesture.
+       */
+      if (change.gesture === "commit") controller.setFeatures(sent.features);
       return;
     }
     if (change.gesture === "update") {
