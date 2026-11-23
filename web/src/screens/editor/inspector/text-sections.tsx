@@ -1,9 +1,10 @@
 import { cn } from "cn";
+import { useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useEditorStoreApi } from "@/editor/store";
+import { useEditorStore, useEditorStoreApi } from "@/editor/store";
 import { useInspectorStrings } from "@/i18n/editor-inspector";
 import type { RichText, TextDir } from "@/model/types";
 import { resolveDir } from "@/render/text";
@@ -136,7 +137,20 @@ const LEADERS: Leader[] = ["none", "straight", "elbow"];
 export function AnnotationSection({ summary, disabled }: SectionProps) {
   const t = useInspectorStrings();
   const { set, commit } = useRestyle();
+  const store = useEditorStoreApi();
+  const field = useRef<HTMLTextAreaElement>(null);
+  const focusFor = useEditorStore((state) => state.view.focusNoteText);
   const { style } = summary;
+  const single = summary.single?.id ?? null;
+
+  /* A note just placed: the cursor goes into its text, so typing starts at once. */
+  useEffect(() => {
+    if (focusFor === null || focusFor !== single) return;
+    field.current?.focus();
+    field.current?.select();
+    store.noteTextFocused();
+  }, [focusFor, single, store]);
+
   if (!has(style["annotation.text"])) return null;
   const text = valueOf(style["annotation.text"]);
   const leader = style["annotation.leader"];
@@ -145,6 +159,7 @@ export function AnnotationSection({ summary, disabled }: SectionProps) {
   return (
     <Section title={t.text.annotation}>
       <Textarea
+        ref={field}
         aria-label={t.text.annotation}
         dir={text?.dir ?? "auto"}
         rows={3}

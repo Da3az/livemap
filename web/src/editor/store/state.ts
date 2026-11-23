@@ -77,6 +77,8 @@ export interface ViewState {
   readonly shortcutSheetOpen: boolean;
   /** Groups folded in this person's list. Not part of the map: each person folds their own. */
   readonly collapsedGroups: ReadonlySet<string>;
+  /** A note just placed on the map: the inspector puts the cursor in its text, so typing starts at once. */
+  readonly focusNoteText: string | null;
 }
 
 /** One undo step. `label` is what the Edit menu shows after "Undo". */

@@ -4,6 +4,7 @@ import { distance, lngLatToMerc, mercToLngLat, type Box, type Pt } from "@/rende
 import { worldWrap } from "@/render/shapes";
 import type { View } from "@/render/view";
 import { bendFor, curveMiddle } from "./bend";
+import { constrainAngle } from "./draw-tool";
 import type { ChromePen } from "./chrome";
 import { deleteVertex, hasFreeVertices, insertVertex, moveVertex, sameVertex, translateFeature, vertexParts, type VertexRef } from "./edit";
 import type { PointerSample } from "./input";
@@ -147,8 +148,17 @@ export class SelectTool implements Tool {
       return;
     }
     if (!gesture.reported && !gesture.inserted && distance(sample, start) < (sample.touch ? VERTEX_DEADZONE_TOUCH : VERTEX_DEADZONE_MOUSE)) return;
-    this.snap = this.host.snapAt(sample, { exclude: new Set([gesture.original.id]), extra: [], touch: sample.touch });
-    const at: LngLat = this.snap?.at ?? mercToLngLat(view.unproject(sample));
+    let at: LngLat;
+    const note = gesture.base.kind === "annotation" ? gesture.base : null;
+    if (note && sample.shift) {
+      /* Shift keeps the leader at a multiple of 45°, measured from the end that stays put. */
+      const fixed = gesture.ref.index === 0 ? note.textAt : note.anchor;
+      this.snap = null;
+      at = mercToLngLat(view.unproject(constrainAngle(view.project(lngLatToMerc(fixed)), sample)));
+    } else {
+      this.snap = this.host.snapAt(sample, { exclude: new Set([gesture.original.id]), extra: [], touch: sample.touch });
+      at = this.snap?.at ?? mercToLngLat(view.unproject(sample));
+    }
     gesture.reported = true;
     this.host.update([moveVertex(gesture.base, gesture.ref, at)]);
   }
@@ -233,7 +243,8 @@ export class SelectTool implements Tool {
       return;
     }
     const handle = this.handleAt(sample);
-    if (handle?.type === "vertex") {
+    /* A note's two handles cannot be removed; a double-click on one is a double-click on the note. */
+    if (handle?.type === "vertex" && this.reshaped()?.kind !== "annotation") {
       this.removeVertex(handle.ref);
       return;
     }
@@ -369,8 +380,18 @@ export class SelectTool implements Tool {
 
   /** The feature being reshaped, as currently shown, or null when it is gone or locked. */
   private reshaped(): MapFeature | null {
-    if (this.reshapingId === null || !this.host.isSelectable(this.reshapingId)) return null;
+    if (this.reshapingId === null) return this.selectedNote();
+    if (!this.host.isSelectable(this.reshapingId)) return null;
     return this.host.feature(this.reshapingId) ?? null;
+  }
+
+  /** One note selected on its own: its anchor and its text box each get a handle, with no reshape mode. */
+  private selectedNote(): MapFeature | null {
+    if (this.placing || this.host.selection().size !== 1) return null;
+    const [id] = this.host.selection();
+    if (id === undefined || !this.host.isSelectable(id)) return null;
+    const feature = this.host.feature(id);
+    return feature?.kind === "annotation" ? feature : null;
   }
 
   private topSelectable(sample: PointerSample): string | null {

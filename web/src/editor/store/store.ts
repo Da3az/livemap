@@ -318,6 +318,7 @@ export class EditorStore {
         paletteOpen: false,
         shortcutSheetOpen: false,
         collapsedGroups: readCollapsedGroups(map.id),
+        focusNoteText: null,
       },
       history: { undo: [], redo: [] },
       save: { kind: "idle" },
@@ -539,6 +540,11 @@ export class EditorStore {
 
   setSnapping(enabled: boolean): void {
     if (this.state.view.snapping !== enabled) this.setView({ snapping: enabled });
+  }
+
+  /** The inspector took the focus the new note asked for. */
+  noteTextFocused(): void {
+    if (this.state.view.focusNoteText !== null) this.setView({ focusNoteText: null });
   }
 
   setToolLocked(locked: boolean): void {
@@ -996,6 +1002,8 @@ export class EditorStore {
       },
     );
     if (change.gesture === "commit") this.closeStep();
+    const placed = change.gesture === "commit" && created === 1 ? change.put[0] : undefined;
+    if (placed?.kind === "annotation" && this.state.doc.features.has(placed.id)) this.setView({ focusNoteText: placed.id });
     const features = this.state.doc.features;
     const inSync =
       result.ok &&
