@@ -9,6 +9,13 @@ import { ColorControl } from "./color-control";
 import { DashDraw, HeadDraw, PatternDraw, ToothDraw } from "./drawings";
 import { has, isMixed, Line, NumberBox, PERCENT, PIXELS, Section, SliderField, Tiles, valueOf } from "./parts";
 
+/** Three common curves, one press each; the slider and the on-map handle give every other. */
+const CURVE_PRESETS = [
+  ["straight", 0],
+  ["slight", 0.35],
+  ["strong", 0.75],
+] as const;
+
 export interface SectionProps {
   summary: SelectionSummary;
   disabled: boolean;
@@ -244,6 +251,25 @@ export function ArrowSection({ summary, disabled }: SectionProps) {
         onChange={(next) => set("arrow.curvature", next)}
         onCommit={commit}
       />
+      <div role="group" aria-label={t.arrow.curvePresets} className="flex flex-wrap items-center gap-1">
+        {CURVE_PRESETS.map(([key, amount]) => (
+          <Toggle
+            key={key}
+            size="sm"
+            variant="outline"
+            isSelected={!isMixed(style["arrow.curvature"]) && curvature === amount}
+            isDisabled={disabled}
+            onChange={() => {
+              set("arrow.curvature", amount);
+              commit();
+            }}
+            className="data-selected:bg-ink data-selected:text-panel"
+          >
+            {t.arrow[key]}
+          </Toggle>
+        ))}
+      </div>
+      <p className="text-xs text-ink-3">{t.arrow.bendHint}</p>
       {arcs ? (
         <Line label={isMixed(bend) ? `${t.arrow.flipHint} · ${t.mixed}` : t.arrow.flipHint}>
           <Toggle

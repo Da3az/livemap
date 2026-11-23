@@ -3,6 +3,7 @@ import { curveMidpoints } from "@/render/curve";
 import { distance, lngLatToMerc, mercToLngLat, type Box, type Pt } from "@/render/geo";
 import { worldWrap } from "@/render/shapes";
 import type { View } from "@/render/view";
+import { bendFor, curveMiddle } from "./bend";
 import type { ChromePen } from "./chrome";
 import { deleteVertex, hasFreeVertices, insertVertex, moveVertex, sameVertex, translateFeature, vertexParts, type VertexRef } from "./edit";
 import type { PointerSample } from "./input";
@@ -40,7 +41,8 @@ interface Handle {
 type Gesture =
   | { type: "move"; originals: MapFeature[]; reported: boolean }
   | { type: "vertex"; original: MapFeature; base: MapFeature; ref: VertexRef; inserted: boolean; reported: boolean }
-  | { type: "marquee"; from: Pt; to: Pt };
+  | { type: "marquee"; from: Pt; to: Pt }
+  | { type: "bend"; original: Extract<MapFeature, { kind: "arrow" }>; reported: boolean };
 
 function boxBetween(a: Pt, b: Pt): Box {
   return { minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y) };
@@ -61,6 +63,8 @@ export class SelectTool implements Tool {
   private nudging: { originals: MapFeature[]; moved: MapFeature[]; timer: number } | null = null;
   /** "Move" waiting for its destination: the selection as it was, and its centre in Mercator. */
   private placing: { originals: MapFeature[]; centre: Pt; previewed: boolean } | null = null;
+  /** The bend handle was tapped: the next tap or click on the map says where the curve's middle goes. */
+  private bendPending: string | null = null;
 
   constructor(private readonly host: ToolHost) {}
 
@@ -80,6 +84,12 @@ export class SelectTool implements Tool {
   down(sample: PointerSample): boolean {
     /* While a move waits for its destination, a press is either that click or a pan. */
     if (this.placing) return false;
+    const bendable = this.bendable();
+    if (bendable && !this.bendPending && this.nearBendHandle(sample, bendable)) {
+      this.gesture = { type: "bend", original: bendable, reported: false };
+      this.host.repaint();
+      return true;
+    }
     const handle = this.handleAt(sample);
     const reshaped = this.reshaped();
     if (handle && reshaped) {
@@ -122,6 +132,13 @@ export class SelectTool implements Tool {
       this.host.repaint();
       return;
     }
+    if (gesture.type === "bend") {
+      const next = this.bentTo(gesture.original, sample);
+      if (!next) return;
+      gesture.reported = true;
+      this.host.update([next]);
+      return;
+    }
     if (gesture.type === "move") {
       const from = view.unproject(start);
       const to = view.unproject(sample);
@@ -144,6 +161,9 @@ export class SelectTool implements Tool {
     if (gesture.type === "marquee") {
       const ids = this.host.renderer.queryBox(boxBetween(gesture.from, gesture.to)).filter((id) => this.host.isSelectable(id));
       this.host.select(ids, sample.ctrl ? "add" : "replace");
+    } else if (gesture.type === "bend") {
+      const current = this.host.feature(gesture.original.id);
+      if (current && gesture.reported) this.host.commit([current]);
     } else if (gesture.type === "move") {
       const moved = gesture.originals.flatMap((feature) => this.host.feature(feature.id) ?? []);
       if (gesture.reported) this.host.commit(moved);
@@ -166,6 +186,20 @@ export class SelectTool implements Tool {
     }
     const gesture = this.gesture;
     this.gesture = null;
+    if (this.bendPending !== null) {
+      /* Tap the handle, then tap where the curve's middle should be: bending without a drag. */
+      const bendable = this.bendable();
+      const next = bendable && bendable.id === this.bendPending ? this.bentTo(bendable, sample) : null;
+      this.bendPending = null;
+      if (next) this.host.commit([next]);
+      this.host.repaint();
+      return;
+    }
+    if (gesture?.type === "bend") {
+      this.bendPending = gesture.original.id;
+      this.host.repaint();
+      return;
+    }
     if (gesture?.type === "vertex") {
       /* A press on a midpoint without a drag still adds the vertex. */
       if (gesture.inserted) this.host.commit([gesture.base]);
@@ -190,6 +224,14 @@ export class SelectTool implements Tool {
     const now = performance.now();
     if (now - this.lastDoubleClick < DOUBLE_CLICK_REPEAT_MS) return;
     this.lastDoubleClick = now;
+    const bendable = this.bendable();
+    if (bendable && this.nearBendHandle(sample, bendable)) {
+      /* Double-clicking the bend handle straightens the arrow. */
+      this.bendPending = null;
+      if (bendable.curvature !== 0) this.host.commit([{ ...bendable, curvature: 0 }]);
+      this.host.repaint();
+      return;
+    }
     const handle = this.handleAt(sample);
     if (handle?.type === "vertex") {
       this.removeVertex(handle.ref);
@@ -231,7 +273,7 @@ export class SelectTool implements Tool {
   /* --------------------------------------------------------------- commands */
 
   key(event: KeyboardEvent): boolean {
-    if (this.placing && event.key === "Escape") {
+    if ((this.placing || this.bendPending !== null) && event.key === "Escape") {
       this.cancel();
       return true;
     }
@@ -267,6 +309,7 @@ export class SelectTool implements Tool {
   }
 
   cancel(): void {
+    this.bendPending = null;
     if (this.placing) {
       if (this.placing.previewed) this.host.abandon(this.placing.originals);
       this.endMove();
@@ -276,7 +319,7 @@ export class SelectTool implements Tool {
     this.gesture = null;
     this.snap = null;
     if (gesture?.type === "move") this.host.abandon(gesture.reported ? gesture.originals : []);
-    if (gesture?.type === "vertex") this.host.abandon(gesture.reported ? [gesture.original] : []);
+    if (gesture?.type === "vertex" || gesture?.type === "bend") this.host.abandon(gesture.reported ? [gesture.original] : []);
     this.host.repaint();
   }
 
@@ -290,8 +333,11 @@ export class SelectTool implements Tool {
 
   cursor(sample: PointerSample | null): string {
     if (this.placing) return "crosshair";
-    if (this.gesture?.type === "move" || this.gesture?.type === "vertex") return "grabbing";
+    if (this.gesture?.type === "move" || this.gesture?.type === "vertex" || this.gesture?.type === "bend") return "grabbing";
+    if (this.bendPending !== null) return "crosshair";
     if (!sample) return "";
+    const bendable = this.bendable();
+    if (bendable && this.nearBendHandle(sample, bendable)) return "grab";
     if (this.handleAt(sample)) return "pointer";
     const hit = this.topSelectable(sample);
     if (hit === null) return "";
@@ -312,6 +358,9 @@ export class SelectTool implements Tool {
     for (const handle of this.handles(view)) {
       if (handle.type === "vertex") pen.handle(handle.at, sameVertex(handle.ref, this.activeVertex) ? "vertex-active" : "vertex", coarse);
     }
+    const bendable = this.bendable();
+    const bendAt = bendable ? this.bendHandle(bendable, view) : null;
+    if (bendable && bendAt) pen.bend(bendAt, coarse, this.gesture?.type === "bend" || this.bendPending === bendable.id);
     if (this.snap) pen.snap(this.snap.screen, this.snap.type);
     if (this.gesture?.type === "marquee") pen.marquee(boxBetween(this.gesture.from, this.gesture.to));
   }
@@ -398,6 +447,34 @@ export class SelectTool implements Tool {
     this.nudging = null;
     window.clearTimeout(nudging.timer);
     this.host.commit(nudging.moved);
+  }
+
+  /** The one selected arrow, when it can be bent here: not locked, not being reshaped, nothing else selected. */
+  private bendable(): Extract<MapFeature, { kind: "arrow" }> | null {
+    if (this.reshapingId !== null || this.placing || this.host.selection().size !== 1) return null;
+    const [id] = this.host.selection();
+    if (id === undefined || !this.host.isSelectable(id)) return null;
+    const feature = this.host.feature(id);
+    return feature?.kind === "arrow" && feature.control.length >= 2 ? feature : null;
+  }
+
+  /** Where the bend handle is drawn: the middle of the curve, in screen pixels. */
+  private bendHandle(arrow: Extract<MapFeature, { kind: "arrow" }>, view: View): Pt | null {
+    const item = this.host.renderer.item(arrow.id);
+    const middle = curveMiddle(arrow.control.map(lngLatToMerc), arrow.curvature, arrow.bend ?? "left");
+    return middle && item ? view.project(middle, worldWrap(item, view)) : null;
+  }
+
+  private nearBendHandle(sample: PointerSample, arrow: Extract<MapFeature, { kind: "arrow" }>): boolean {
+    const at = this.bendHandle(arrow, this.host.renderer.view());
+    return at !== null && distance(sample, at) <= (sample.touch ? HANDLE_REACH_TOUCH : HANDLE_REACH_MOUSE);
+  }
+
+  /** The arrow bent so the middle of its curve passes as near the pointer as it can. */
+  private bentTo(arrow: Extract<MapFeature, { kind: "arrow" }>, sample: PointerSample): MapFeature | null {
+    const shape = bendFor(arrow.control.map(lngLatToMerc), this.host.renderer.view().unproject(sample));
+    if (!shape) return null;
+    return arrow.control.length === 2 ? { ...arrow, curvature: shape.curvature, bend: shape.bend } : { ...arrow, curvature: shape.curvature };
   }
 
   /** The selection moved so its centre sits under the pointer. */

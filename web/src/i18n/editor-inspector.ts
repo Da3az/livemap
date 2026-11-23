@@ -91,6 +91,11 @@ const en = {
     curvature: "Curve",
     flip: "Flip",
     flipHint: "Bow the arc to the other side",
+    curvePresets: "Curve presets",
+    straight: "Straight",
+    slight: "Slight",
+    strong: "Strong",
+    bendHint: "Or drag the diamond at the arrow's middle. Double-click it to straighten.",
     tapered: "Tapered shaft",
   },
   frontline: {
@@ -277,6 +282,11 @@ const ar: typeof en = {
     curvature: "الانحناء",
     flip: "اقلب",
     flipHint: "حنِّ القوس إلى الجهة الأخرى",
+    curvePresets: "انحناءات جاهزة",
+    straight: "مستقيم",
+    slight: "خفيف",
+    strong: "قوي",
+    bendHint: "أو اسحب المعيّن في منتصف السهم. انقره مرتين لتقويمه.",
     tapered: "ساق مستدقّة",
   },
   frontline: {

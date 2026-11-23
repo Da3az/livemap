@@ -196,7 +196,7 @@ function withGeometry(current: MapFeature, incoming: MapFeature): MapFeature | n
       return incoming.kind === "frontline" ? { ...current, path: incoming.path } : null;
     case "arrow":
       return incoming.kind === "arrow"
-        ? { ...current, control: incoming.control, curvature: incoming.curvature }
+        ? { ...current, control: incoming.control, curvature: incoming.curvature, bend: incoming.bend }
         : null;
     case "point":
       return incoming.kind === "point" ? { ...current, at: incoming.at } : null;
