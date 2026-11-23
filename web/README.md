@@ -80,6 +80,21 @@ For example `/maps/m_shaheen?persona=owner&fast=1`. The full list is at the top 
 - `npm run screenshots` captures that catalogue at several widths, directions and themes into `screenshots/`, with an index. It starts its own dev server and uses the Chromium already cached by Playwright; it never downloads a browser. Options are documented at the top of `scripts/screenshots.mjs`.
 - `node scripts/shot.mjs <url> <out.png> [width] [height] [--dark] [--full]` takes a single screenshot.
 
+## Working on the map
+
+The full key list is the editor's shortcut sheet (`?`), generated from `src/editor/store/shortcuts.ts`. What is not a key:
+
+- Every drawing tool goes back to Select after a shape. **Q**, the dock's Keep button, or a double-click on a tool keeps it.
+- Arrows draw by dragging, or point by point with clicks. Space+drag and middle-button drag always move the map.
+- Undo while drawing takes back a point; straight after Finish it reopens the shape.
+- Keyboard drawing: with a drawing tool, an arrow key shows a cross at the middle of the visible map. Arrow keys move the map under it, Enter adds a point, Enter on the same spot again finishes. The draw strip has the same actions as buttons.
+- Moving without a drag: **M** (or Move in the inspector or a menu), then click or tap the destination. Arrow keys nudge a selection (Shift: 10 px).
+- Right-click on the map: the list's commands for what is under the pointer; on empty map, add here and paste here.
+- A selected arrow has a diamond at its middle: drag it, or tap it and then tap the target. Double-click straightens.
+- A selected note has a handle on its anchor and one on its text box. Shift keeps the leader at 45° steps.
+- A stylus turns pen mode on: the pen draws, a finger moves the map. The status bar switches it off.
+- The map stays north-up. Bearing and pitch are set in Map settings.
+
 ## Where things are
 
 | Path | What |

@@ -688,3 +688,4 @@ above, this section wins.
 | 42 Place search | **Removed** (user, 2026-11-22): no search box, no `searchPlaces`, no endpoint. |
 | Guest signup | `POST /auth/guest` takes `{ turnstileToken }` and answers `{ token, tenantSlug, expiresAt }`; the client stores the token and asks for the session. Signup switched off answers 403 `guest_signup_disabled`. |
 | List | `GET /api/v1/maps?archived=true\|false` answers `{ maps }`. |
+| Embed pan buttons | `MapSettings.embed.panButtons: boolean` (default true): up/down/left/right and back-to-the-opening-view buttons beside the zoom buttons, the no-drag way to move the map (WCAG 2.5.7). Settings are one jsonb column, so no migration: `normaliseSettings()` fills the field for maps saved before it. The embed URL overrides it with `pan=1\|0`, as `legend` does. |
