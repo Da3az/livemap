@@ -46,6 +46,7 @@ import type {
   PenMode,
   ViewState,
 } from "./state";
+import { lngLatToMerc, mercToLngLat } from "@/render/geo";
 import { copyStyleOf, detachPreset, pasteStyleOnto, presetLookup, presetStyleFrom, PRESET_KINDS } from "./style";
 import { applyStylePatch, patchProperties, stylePropertyLabel, type StylePatch } from "./style-properties";
 import { bi, featuresNoun, newId, rich, verbFeatures, type Bilingual } from "./text";
@@ -169,7 +170,11 @@ function lockedGroups(settings: MapSettings): Set<string> {
 }
 
 function translate(feature: MapFeature, offset: LngLat): MapFeature {
-  const move = (at: LngLat): LngLat => [at[0] + offset[0], at[1] + offset[1]];
+  return mapPositions(feature, (at) => [at[0] + offset[0], at[1] + offset[1]]);
+}
+
+/** Every position of a feature through `move`: vertices, a point's place, a note's anchor and text box. */
+function mapPositions(feature: MapFeature, move: (at: LngLat) => LngLat): MapFeature {
   switch (feature.kind) {
     case "area":
       return { ...feature, rings: feature.rings.map((ring) => ring.map(move)) };
@@ -1080,6 +1085,40 @@ export class EditorStore {
     const style = copyStyleOf(feature, presetLookup(this.state.doc.settings.presets));
     this.set({ clipboard: { ...this.state.clipboard, style } });
     return OK_CHANGED;
+  }
+
+  /**
+   * Turn the selection by `rotate` degrees (clockwise on a north-up map) and
+   * scale it by `scale` (1 is unchanged), about the centre of its bounding
+   * box. Worked in Web Mercator, so shapes keep the look they have on the map.
+   * Icons and notes keep their size and upright text; only their places move.
+   */
+  transformSelection(options: { rotate?: number; scale?: number }, ids?: readonly string[]): CommandResult {
+    const angle = ((options.rotate ?? 0) * Math.PI) / 180;
+    const factor = options.scale ?? 1;
+    if (!Number.isFinite(angle) || !Number.isFinite(factor) || factor <= 0) return this.refuse({ code: "invalid", detail: "Rotation must be a number of degrees and scale a positive percentage." });
+    if (angle === 0 && factor === 1) return OK_UNCHANGED;
+    const label = angle !== 0 && factor !== 1 ? bi("Rotate and scale", "تدوير وتحجيم") : angle !== 0 ? bi("Rotate", "تدوير") : bi("Scale", "تحجيم");
+    return this.commit(label, (draft) => {
+      const { editable } = this.resolveTargets(draft, ids);
+      const points: { x: number; y: number }[] = [];
+      for (const feature of editable) mapPositions(feature, (at) => (points.push(lngLatToMerc(at)), at));
+      if (points.length === 0) return this.editEach(draft, ids, (feature) => feature);
+      const xs = points.map((p) => p.x);
+      const ys = points.map((p) => p.y);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      const cos = Math.cos(angle) * factor;
+      const sin = Math.sin(angle) * factor;
+      /* Mercator y grows southward, so this turn is clockwise on screen. */
+      const move = (at: LngLat): LngLat => {
+        const p = lngLatToMerc(at);
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        return mercToLngLat({ x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos });
+      };
+      return this.editEach(draft, ids, (feature) => mapPositions(feature, move));
+    });
   }
 
   /** Paste the copied look onto features, translating between kinds where it can. */

@@ -12,7 +12,9 @@ import { useEditorRuntime } from "../runtime";
 import { formatArea, formatLength, formatLngLat, isMac } from "../shared/format";
 import { useEditorLayout } from "../shared/layout";
 import { Tip } from "../shared/tip";
-import { Section } from "./parts";
+import { NumberBox, PERCENT, Section } from "./parts";
+
+const DEGREES: Intl.NumberFormatOptions = { style: "unit", unit: "degree", maximumFractionDigits: 1 };
 import type { SectionProps } from "./style-sections";
 
 /**
@@ -123,15 +125,35 @@ export function ShapeSection({ summary, disabled }: SectionProps) {
     </Tip>
   );
 
+  /* Typed turning and resizing: each field applies what is typed, then reads 0° and 100% again. */
+  const transform = (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <label className="flex items-center gap-1.5 text-xs text-ink-2">
+          {t.shape.rotate}
+          <NumberBox label={t.shape.rotate} value={0} min={-360} max={360} step={1} format={DEGREES} disabled={disabled} onCommit={(rotate) => store.transformSelection({ rotate })} />
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-ink-2">
+          {t.shape.scale}
+          <NumberBox label={t.shape.scale} value={1} min={0.01} max={100} step={0.01} format={PERCENT} disabled={disabled} onCommit={(scale) => store.transformSelection({ scale })} />
+        </label>
+      </div>
+      <p className="text-xs text-ink-3">{t.shape.transformHint}</p>
+    </div>
+  );
+
   if (!feature) {
     return (
-      <div className="flex items-center gap-1.5 border-b border-rule px-3 py-2.5">
-        <Button variant="outline" size={size} onPress={() => controller?.fitFeatures([...summary.ids])}>
-          {t.shape.zoom}
-        </Button>
-        {move}
-        <span className="flex-1" />
-        <StyleMenu disabled={disabled} />
+      <div className="flex flex-col gap-2 border-b border-rule px-3 py-2.5">
+        <div className="flex items-center gap-1.5">
+          <Button variant="outline" size={size} onPress={() => controller?.fitFeatures([...summary.ids])}>
+            {t.shape.zoom}
+          </Button>
+          {move}
+          <span className="flex-1" />
+          <StyleMenu disabled={disabled} />
+        </div>
+        {transform}
       </div>
     );
   }
@@ -160,6 +182,7 @@ export function ShapeSection({ summary, disabled }: SectionProps) {
       <p className="text-xs text-ink-3 tabular-nums">
         <bdi>{measure(feature, t, lang).join(" · ")}</bdi>
       </p>
+      {feature.kind === "point" ? null : transform}
     </div>
   );
 }
