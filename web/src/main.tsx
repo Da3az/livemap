@@ -6,6 +6,25 @@ import { AppProviders } from "@/app/providers";
 import { router } from "@/app/router";
 import "./index.css";
 
+/*
+ * A tab opened before a deploy (or a rebuild) still holds the old index.html,
+ * whose lazily loaded chunks are gone from the server. Loading one fails; one
+ * reload fetches the new page. The timestamp stops a loop if the reload does
+ * not help, and the failure then surfaces as it would have.
+ */
+const RELOADED_KEY = "livemap.chunk-reload";
+window.addEventListener("vite:preloadError", (event) => {
+  try {
+    const last = Number(window.sessionStorage.getItem(RELOADED_KEY) ?? 0);
+    if (Date.now() - last < 10_000) return;
+    window.sessionStorage.setItem(RELOADED_KEY, String(Date.now()));
+  } catch {
+    return;
+  }
+  event.preventDefault();
+  window.location.reload();
+});
+
 const root = createRoot(document.getElementById("root")!);
 
 /*

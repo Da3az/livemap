@@ -8,6 +8,7 @@ import Fastify, {
 } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
+import { join } from "node:path";
 import swagger from "@fastify/swagger";
 import apiReference from "@scalar/fastify-api-reference";
 import {
@@ -275,41 +276,56 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   if (deps.appDir) {
+    const setHeaders = (res: { header: (name: string, value: string) => unknown }, path: string): void => {
+      // The embed page runs in a sandboxed frame, whose origin is opaque:
+      // every script, stylesheet, font and the map worker it loads is a
+      // cross-origin request. These files are public, so saying so costs nothing.
+      res.header("access-control-allow-origin", "*");
+      res.header("x-content-type-options", "nosniff");
+      // Vite content-hashes everything under assets/, so it can never change
+      // under a cached copy. Anything else at the root keeps a stable name.
+      // index.html must revalidate on every load, or a deploy stays
+      // invisible until caches expire; the fallback below sends it.
+      res.header(
+        "cache-control",
+        /[\\/]assets[\\/]/.test(path)
+          ? "public, max-age=31536000, immutable"
+          : /index\.html$/.test(path)
+            ? "no-cache"
+            : "public, max-age=300",
+      );
+    };
+    // The few files at the root (embed-host.js, the icon): one route per file
+    // rather than a catch-all. A catch-all at "/" swallows every unmatched
+    // path, /api/v1/* included, and hands it to the page fallback, so an API
+    // miss came back as the app's HTML with a 200 instead of JSON.
     app.register(fastifyStatic, {
       root: deps.appDir,
       // "/" is a client route like any other; the fallback below answers it.
       index: false,
-      // One route per built file rather than a catch-all. A catch-all route
-      // swallows every unmatched path, /api/v1/* included, and hands it to the
-      // page fallback, so an API miss came back as the app's HTML with a 200
-      // instead of the API scope's JSON answer. The build is fixed at start-up,
-      // so not serving files added later costs nothing.
       wildcard: false,
       // index.html always goes through the fallback, so it always gets the
-      // page headers (no-cache, framing) whichever URL asked for it.
-      globIgnore: ["index.html"],
+      // page headers (no-cache, framing) whichever URL asked for it. assets/
+      // has its own mount below.
+      globIgnore: ["index.html", "assets/**"],
       allowedPath: (pathName) => pathName !== "/index.html",
-      // Each response sets its own cache-control below.
+      // Each response sets its own cache-control in setHeaders.
       cacheControl: false,
-      setHeaders: (res, path) => {
-        // The embed page runs in a sandboxed frame, whose origin is opaque:
-        // every script, stylesheet, font and the map worker it loads is a
-        // cross-origin request. These files are public, so saying so costs nothing.
-        res.header("access-control-allow-origin", "*");
-        res.header("x-content-type-options", "nosniff");
-        // Vite content-hashes everything under assets/, so it can never change
-        // under a cached copy. Anything else at the root keeps a stable name.
-        // index.html must revalidate on every load, or a deploy stays
-        // invisible until caches expire; the fallback below sends it.
-        res.header(
-          "cache-control",
-          /[\\/]assets[\\/]/.test(path)
-            ? "public, max-age=31536000, immutable"
-            : /index\.html$/.test(path)
-              ? "no-cache"
-              : "public, max-age=300",
-        );
-      },
+      setHeaders,
+    });
+    // The hashed bundle, looked up on disk per request. index.html is read
+    // per request too, so a rebuild under a running server must not leave the
+    // page naming scripts the server has no route for: that was a white page.
+    // A catch-all under /assets/ swallows nothing else; a miss falls through
+    // to the fallback, which answers a file path with a JSON 404.
+    app.register(fastifyStatic, {
+      root: join(deps.appDir, "assets"),
+      prefix: "/assets/",
+      index: false,
+      wildcard: true,
+      decorateReply: false,
+      cacheControl: false,
+      setHeaders,
     });
   }
   const jsonNotFound: RouteHandlerMethod = (_req, reply) =>
