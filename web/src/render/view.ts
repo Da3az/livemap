@@ -29,9 +29,16 @@ export interface View {
 const CALIBRATION_SPAN = 256;
 
 export function readView(map: MapLibreMap): View {
-  const container = map.getContainer();
-  const width = container.clientWidth;
-  const height = container.clientHeight;
+  /*
+   * The canvas, not the container: when a pane opens, the container narrows
+   * a moment before MapLibre resizes its camera, and the canvas keeps the
+   * camera's size until then. Measuring the container would pair the new
+   * width with the old projection and leave the selection drawn off the
+   * features until something else moved the map.
+   */
+  const canvas = map.getCanvas();
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
   const centre = map.getCenter();
   const zoom = map.getZoom();
   const bearing = map.getBearing();

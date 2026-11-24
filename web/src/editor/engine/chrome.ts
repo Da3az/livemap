@@ -22,6 +22,7 @@ export class Chrome {
   private paused = false;
   private palette: Palette;
   private readonly onRender: () => void;
+  private readonly onResize: () => void;
 
   constructor(
     private readonly map: MapLibreMap,
@@ -37,6 +38,9 @@ export class Chrome {
       if (readView(map).key !== this.paintedViewKey) this.paintNow();
     };
     map.on("render", this.onRender);
+    /* A resize can leave the view's key as it was painted (see readView), so it always repaints. */
+    this.onResize = () => this.paintNow();
+    map.on("resize", this.onResize);
   }
 
   setPainter(painter: ChromePainter): void {
@@ -70,6 +74,7 @@ export class Chrome {
   destroy(): void {
     cancelAnimationFrame(this.frame);
     this.map.off("render", this.onRender);
+    this.map.off("resize", this.onResize);
     this.canvas.remove();
     this.painter = null;
   }
