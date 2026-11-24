@@ -115,18 +115,22 @@ export class ChromePen {
   }
 
   /** A thin line along what the feature paints, leaving its own stroke and dash visible. */
+  /**
+   * What is selected: a soft glow in the selection colour along the
+   * feature, rather than a crisp line, so a selected arrow or line does not
+   * read as a second feature drawn beside it (user, 2026-11-24).
+   */
   outline(shape: ScreenShape): void {
     const { context } = this;
     traceOutline(context, shape);
     context.lineJoin = "round";
-    context.lineWidth = 3;
-    context.strokeStyle = this.paper;
-    context.globalAlpha = 0.55;
+    context.lineCap = "round";
+    context.lineWidth = 8;
+    context.strokeStyle = this.accent;
+    context.globalAlpha = 0.2;
     context.stroke();
     context.globalAlpha = 1;
-    context.lineWidth = 1.25;
-    context.strokeStyle = this.accent;
-    context.stroke();
+    context.lineCap = "butt";
   }
 
   handle(at: Pt, look: HandleLook, coarse: boolean): void {

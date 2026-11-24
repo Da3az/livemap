@@ -123,6 +123,26 @@ function pruneSelection(selection: Selection, doc: Doc): Selection {
   return { ids, groupId };
 }
 
+const KEEP_TOOL_KEY = "livemap.keep-tool";
+
+/** Keeping the drawing tool is a working habit, so it is remembered in this browser for every map. */
+function readToolLocked(): boolean {
+  try {
+    return window.localStorage.getItem(KEEP_TOOL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeToolLocked(locked: boolean): void {
+  try {
+    if (locked) window.localStorage.setItem(KEEP_TOOL_KEY, "1");
+    else window.localStorage.removeItem(KEEP_TOOL_KEY);
+  } catch {
+    /* Lasts for this visit. */
+  }
+}
+
 const PEN_KEY = "livemap.pen-mode";
 
 /** Pen mode is remembered for the tab's session, so turning it off sticks across maps. */
@@ -315,7 +335,7 @@ export class EditorStore {
       timeline: { playhead: null, playing: false },
       view: {
         snapping: true,
-        toolLocked: false,
+        toolLocked: readToolLocked(),
         penMode: readPenMode(),
         listCollapsed: false,
         inspectorCollapsed: false,
@@ -553,7 +573,9 @@ export class EditorStore {
   }
 
   setToolLocked(locked: boolean): void {
-    if (this.state.view.toolLocked !== locked) this.setView({ toolLocked: locked });
+    if (this.state.view.toolLocked === locked) return;
+    writeToolLocked(locked);
+    this.setView({ toolLocked: locked });
   }
 
   setPenMode(mode: PenMode): void {
