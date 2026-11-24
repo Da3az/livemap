@@ -125,19 +125,22 @@ function pruneSelection(selection: Selection, doc: Doc): Selection {
 
 const KEEP_TOOL_KEY = "livemap.keep-tool";
 
-/** Keeping the drawing tool is a working habit, so it is remembered in this browser for every map. */
+/**
+ * Keeping the drawing tool is on unless this browser turned it off: drawing
+ * several arrows in a row is the common case (user, 2026-11-25). The choice
+ * is remembered for every map.
+ */
 function readToolLocked(): boolean {
   try {
-    return window.localStorage.getItem(KEEP_TOOL_KEY) === "1";
+    return window.localStorage.getItem(KEEP_TOOL_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 
 function writeToolLocked(locked: boolean): void {
   try {
-    if (locked) window.localStorage.setItem(KEEP_TOOL_KEY, "1");
-    else window.localStorage.removeItem(KEEP_TOOL_KEY);
+    window.localStorage.setItem(KEEP_TOOL_KEY, locked ? "1" : "0");
   } catch {
     /* Lasts for this visit. */
   }

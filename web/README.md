@@ -84,7 +84,7 @@ For example `/maps/m_shaheen?persona=owner&fast=1`. The full list is at the top 
 
 The full key list is the editor's shortcut sheet (`?`), generated from `src/editor/store/shortcuts.ts`. What is not a key:
 
-- Every drawing tool goes back to Select after a shape. **Q**, the dock's Keep button, or a double-click on a tool keeps it.
+- A drawing tool stays active after each shape, so several arrows go in a row. **Q** or the dock's Keep button turns that off (back to Select after each shape); the choice is remembered in the browser.
 - Arrows draw by dragging, or point by point with clicks. Space+drag and middle-button drag always move the map.
 - Undo while drawing takes back a point; straight after Finish it reopens the shape.
 - Keyboard drawing: with a drawing tool, an arrow key shows a cross at the middle of the visible map. Arrow keys move the map under it, Enter adds a point, Enter on the same spot again finishes. The draw strip has the same actions as buttons.

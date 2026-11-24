@@ -130,6 +130,7 @@ From a study of map tools, design tools and WCAG 2.2 (private planning notes, `i
 | # | Question | Chosen |
 |---|---|---|
 | X.A | Tool after finishing a shape | Every tool returns to Select; **Q** or a visible lock button keeps it active (double-clicking the tool as a secondary way). One rule, easy to find; matches tldraw and Excalidraw |
+| X.A′ | Tool after finishing a shape, revised (user, 2026-11-25) | **Keep is on by default**: the tool stays active so several arrows can be drawn in a row. Q or the Keep button turns it off, and the choice is remembered in the browser for every map. Supersedes X.A's default |
 | X.B | Moving a feature | **Select first, then drag, for every kind.** An accidental move on a live news map is a factual error. A "Move, then tap the destination" command is the no-drag alternative |
 | X.C | Rotate and tilt | **Off in the editor and the embed, in every gesture** (drag, keyboard, twist, tilt). Bearing and pitch are set in Map settings |
 | X.D | Freehand, drag handles for rotate/resize | Later. **Typed rotation and size fields now** |
