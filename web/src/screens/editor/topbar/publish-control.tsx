@@ -67,7 +67,7 @@ export function PublishControl({ compact = false }: { compact?: boolean }) {
       <div
         role="group"
         aria-label={t.publish.group}
-        className="flex h-10 min-w-0 shrink items-center gap-3 rounded-pill border border-rule-strong bg-panel ps-3.5 pe-1"
+        className="flex h-9 min-w-0 shrink items-center gap-3 rounded-pill border border-rule-strong bg-panel ps-3.5 pe-1"
       >
         <div className="flex max-w-44 min-w-0 shrink flex-col justify-center overflow-hidden 2xl:max-w-80" aria-live="polite" title={detail ?? undefined}>
           {badge}
@@ -80,7 +80,7 @@ export function PublishControl({ compact = false }: { compact?: boolean }) {
         {readOnly ? null : (
           <Tip label={t.publish.tip} keys={formatShortcut(shortcutFor("file.publish")?.keys ?? "", isMac())}>
             <Button
-              className="h-8 shrink-0 rounded-pill px-4 font-semibold"
+              className="h-7 shrink-0 rounded-pill px-4 font-semibold"
               isDisabled={publishing || !canPublish}
               onPress={() => void store.publish(api)}
             >
@@ -96,7 +96,7 @@ export function PublishControl({ compact = false }: { compact?: boolean }) {
           </Tip>
         )}
       </div>
-      <Link to={`/maps/${meta.id}/versions`} aria-label={t.publish.history} className="shrink-0 rounded-key text-xs font-medium whitespace-nowrap text-bathy underline decoration-1 underline-offset-2 hover:decoration-2">
+      <Link to={`/maps/${meta.id}/versions`} aria-label={t.publish.history} className="flex h-9 shrink-0 items-center rounded-field px-2 text-sm font-medium whitespace-nowrap text-ink-2 hover:bg-well hover:text-ink">
         <span className="2xl:hidden">{t.publish.historyShort}</span>
         <span className="max-2xl:hidden">{t.publish.history}</span>
       </Link>

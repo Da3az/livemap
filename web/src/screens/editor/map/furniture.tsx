@@ -4,7 +4,7 @@ import { Icon } from "@/components/icons";
 import { selectDrawOrder, selectLegend, shallowEqual, useEditorStore } from "@/editor/store";
 import { useEditorStrings } from "@/i18n/editor";
 import { MapLegend } from "@/render/MapLegend";
-import { MapCredits, MapTitleBlock } from "@/render/MapTitleBlock";
+import { MapCredits } from "@/render/MapTitleBlock";
 import { ScaleBar } from "@/render/ScaleBar";
 import { useEditorRuntime } from "../runtime";
 import { useMapTheme } from "../shared/palette";
@@ -174,7 +174,7 @@ function FoldedKey() {
 
 /**
  * The published map's furniture, drawn by the same components the reader's
- * view uses, so the author sees the title block, key and credits as they
+ * view uses, so the author sees the key and credits as they
  * will be. It is display only: settings are changed in the map settings pane.
  *
  * It keeps out of the author's way three ways: any part folds to a one-line
@@ -184,13 +184,14 @@ function FoldedKey() {
  *
  * `bottom` is how far up the bottom corners start, to stand clear of the dock.
  * When the map area is too short for all of it, the credits go first and the
- * key folds to its heading; the title block always shows.
+ * key folds to its heading. The map's title is not drawn here: readers get
+ * it above the map, and the top bar already shows it.
  */
 export function Furniture({ bottom }: { bottom: number }) {
   const t = useEditorStrings();
   const ui = useEditorUi();
-  const { title, settings, dir } = useEditorStore(
-    (state) => ({ title: state.doc.title, settings: state.doc.settings, dir: state.doc.uiDir }),
+  const { settings, dir } = useEditorStore(
+    (state) => ({ settings: state.doc.settings, dir: state.doc.uiDir }),
     shallowEqual,
   );
   const features = useEditorStore(selectDrawOrder);
@@ -203,15 +204,16 @@ export function Furniture({ bottom }: { bottom: number }) {
 
   const startColumn = useRef<HTMLDivElement>(null);
   const endColumn = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLDivElement>(null);
   const startKeyRef = useRef<HTMLDivElement>(null);
   const creditsRef = useRef<HTMLDivElement>(null);
   const endKeyRef = useRef<HTMLDivElement>(null);
   const none = useRef<HTMLDivElement>(null);
-  const layout = `${corner}-${folded.title}-${folded.key}-${folded.credits}`;
-  const startFit = useFit(startColumn, [titleRef, startKeyRef, creditsRef], layout);
+  /* The first block always counts as fitting, so an empty one leads: then the key can fold too. */
+  const noneStart = useRef<HTMLDivElement>(null);
+  const layout = `${corner}-${folded.key}-${folded.credits}`;
+  const startFit = useFit(startColumn, [noneStart, startKeyRef, creditsRef], layout);
   const endFit = useFit(endColumn, [none, endKeyRef], layout);
-  const under = usePartUnderPointer({ title: titleRef, key: startSide ? startKeyRef : endKeyRef, credits: creditsRef });
+  const under = usePartUnderPointer({ key: startSide ? startKeyRef : endKeyRef, credits: creditsRef });
   const faded = (part: FurniturePart): "drawing" | "pointer" | null => (drawing ? "drawing" : under === part ? "pointer" : null);
 
   if (ui.furniture.hidden) return null;
@@ -237,17 +239,6 @@ export function Furniture({ bottom }: { bottom: number }) {
     <>
       <div ref={startColumn} className={cn(column, "start-3 items-start")} style={{ bottom }}>
         <div className="flex max-w-full flex-col items-start gap-2">
-          {folded.title ? (
-            <Tab part="title">
-              <span dir={title.dir} className="truncate font-title text-base font-semibold">
-                {title.value}
-              </span>
-            </Tab>
-          ) : (
-            <Block part="title" innerRef={titleRef} shown faded={faded("title")}>
-              <MapTitleBlock title={title} settings={settings} dir={dir} />
-            </Block>
-          )}
           {corner === "top-start" ? startKey : null}
         </div>
         <div className="flex max-w-full flex-col items-start gap-2">

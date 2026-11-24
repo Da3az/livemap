@@ -1,7 +1,11 @@
 import { createContext, useContext } from "react";
 
-/** The three pieces of furniture the published map carries. */
-export type FurniturePart = "title" | "key" | "credits";
+/**
+ * The furniture the published map carries over the map itself. Its title is
+ * not one: the embed sets it above the map, and the editor shows it in the
+ * top bar.
+ */
+export type FurniturePart = "key" | "credits";
 
 /**
  * How the published map's furniture sits over the map while editing. A view
@@ -14,9 +18,9 @@ export interface FurnitureView {
 }
 
 /** Exactly as it will publish. */
-export const FURNITURE_PUBLISHED: FurnitureView = { hidden: false, folded: { title: false, key: false, credits: false } };
+export const FURNITURE_PUBLISHED: FurnitureView = { hidden: false, folded: { key: false, credits: false } };
 /** Every part folded to its tab. */
-export const FURNITURE_FOLDED: FurnitureView = { hidden: false, folded: { title: true, key: true, credits: true } };
+export const FURNITURE_FOLDED: FurnitureView = { hidden: false, folded: { key: true, credits: true } };
 /** Nothing in the way. */
 export const FURNITURE_HIDDEN: FurnitureView = { ...FURNITURE_PUBLISHED, hidden: true };
 
@@ -28,7 +32,7 @@ export interface EditorUi {
   /** On a tablet the panes slide over the map, one at a time. */
   overlayPane: "list" | "inspector" | null;
   setOverlayPane: (pane: "list" | "inspector" | null) => void;
-  /** How the published map's title block, key and credits are drawn over the map. A view choice, not a setting. */
+  /** How the published map's key and credits are drawn over the map. A view choice, not a setting. */
   furniture: FurnitureView;
   setFurniture: (view: FurnitureView) => void;
   previewOpen: boolean;

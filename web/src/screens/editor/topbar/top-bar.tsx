@@ -32,9 +32,9 @@ export function TopBar() {
     </Link>
   );
   const title = (
-    <div className="flex min-w-32 flex-1 flex-col justify-center">
-      <TitleField className="h-7 text-xl" />
-      <p className="px-1.5 font-title text-xs whitespace-nowrap text-ink-3 tabular-nums italic" title={t.top.revisionHint}>
+    <div className="flex min-w-40 flex-1 flex-col justify-center">
+      <TitleField className="h-7 text-lg leading-7" />
+      <p className="px-1.5 font-title text-2xs leading-4 whitespace-nowrap text-ink-3 tabular-nums italic" title={t.top.revisionHint}>
         {t.top.revision(rev)}
       </p>
     </div>
