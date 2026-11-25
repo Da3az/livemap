@@ -17,7 +17,7 @@ import { lngLatToMerc, mercToLngLat, metresPerPixel } from "@/render/geo";
 import type { MapLibreMap } from "@/render/maplibre";
 import { BasemapSync } from "./basemap-sync";
 import { CAPABILITIES, createEditorMap, holdMap, releaseMap } from "./editor-map";
-import { boundsOf, fitInside, maxCanvasSide, moveTo, NO_INSETS, readViewport } from "./camera";
+import { boundsOf, fitInside, holdContentOnResize, maxCanvasSide, moveTo, NO_INSETS, readViewport } from "./camera";
 import { Chrome } from "./chrome";
 import { wireInput, wireMapEvents } from "./controller-input";
 import type { PenMode } from "./input";
@@ -117,6 +117,7 @@ class MapLibreController implements EditorController {
     this.basemapSync = new BasemapSync(this.map, this.ready, (detail) => this.events.emit("problem", { code: "tiles_failed", detail }), () => this.destroyed);
     this.host = this.createHost();
     this.disposers.push(wireMapEvents(this.map, this.events, this.basemapSync));
+    this.disposers.push(holdContentOnResize(this.map));
     if (options.interactive) {
       this.chrome = new Chrome(this.map, this.renderer.getPalette());
       this.selectTool = new SelectTool(this.host);

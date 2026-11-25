@@ -78,3 +78,29 @@ export function maxCanvasSide(map: MapLibreMap): number {
   if (!gl) return 4096;
   return Math.min(MAX_EXPORT_CANVAS_SIDE, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE));
 }
+
+/**
+ * Keeps what is on the map where it is on the page when the map's box
+ * changes because a pane opened or closed beside it. MapLibre keeps the
+ * centre on a resize, so a pane opening at one side used to slide every
+ * feature by half the pane's width. A resize of the window itself keeps
+ * MapLibre's own behaviour. Returns the disposer.
+ */
+export function holdContentOnResize(map: MapLibreMap): () => void {
+  const container = map.getContainer();
+  let box = container.getBoundingClientRect();
+  let windowSize = { width: window.innerWidth, height: window.innerHeight };
+  const onResize = () => {
+    const next = container.getBoundingClientRect();
+    const nextWindow = { width: window.innerWidth, height: window.innerHeight };
+    const sameWindow = nextWindow.width === windowSize.width && nextWindow.height === windowSize.height;
+    /* Where the kept centre went on the page; moving the camera by as much puts everything back. */
+    const dx = next.left + next.width / 2 - (box.left + box.width / 2);
+    const dy = next.top + next.height / 2 - (box.top + box.height / 2);
+    box = next;
+    windowSize = nextWindow;
+    if (sameWindow && box.width > 0 && box.height > 0 && (dx !== 0 || dy !== 0)) map.panBy([dx, dy], { animate: false });
+  };
+  map.on("resize", onResize);
+  return () => map.off("resize", onResize);
+}
