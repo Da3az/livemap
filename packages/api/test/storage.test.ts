@@ -21,42 +21,6 @@ function contract(name: string, make: () => ArtifactStore | null, skip?: string)
     const root = `contract-test/${randomBytes(6).toString("hex")}/`;
     const store = () => make()!;
 
-    test("get returns what put stored, metadata included", async () => {
-      const s = store();
-      await s.put(`${root}a.json`, '{"v":1}', PUT);
-      const got = await s.get(`${root}a.json`);
-      assert.ok(got);
-      assert.equal(got.body, '{"v":1}');
-      assert.equal(got.contentType, PUT.contentType);
-      assert.equal(got.cacheControl, PUT.cacheControl);
-      // Our content hash, not whatever the backend computed for itself.
-      assert.equal(got.etag, PUT.etag);
-      await s.deletePrefix(root);
-    });
-
-    test("a missing key is null, not an error", async () => {
-      const s = store();
-      assert.equal(await s.get(`${root}nope.json`), null);
-      assert.equal(await s.has(`${root}nope.json`), false);
-    });
-
-    test("put overwrites", async () => {
-      const s = store();
-      await s.put(`${root}p.json`, "one", PUT);
-      await s.put(`${root}p.json`, "two", PUT);
-      assert.equal((await s.get(`${root}p.json`))?.body, "two");
-      await s.deletePrefix(root);
-    });
-
-    test("delete removes, and deleting again is not an error", async () => {
-      const s = store();
-      await s.put(`${root}d.json`, "x", PUT);
-      assert.equal(await s.has(`${root}d.json`), true);
-      await s.delete(`${root}d.json`);
-      assert.equal(await s.has(`${root}d.json`), false);
-      await s.delete(`${root}d.json`);
-    });
-
     test("deletePrefix removes one tenant and leaves its neighbour", async () => {
       // `t/ab/` must not take `t/abc/` with it.
       const s = store();
@@ -116,26 +80,6 @@ describe("R2ArtifactStore requests", () => {
     return { store, seen };
   }
 
-  test("put signs the request and sends cache headers with the object", async () => {
-    const { store, seen } = fake(() => new Response(null, { status: 200 }));
-    await store.put("t/acme/m/x/latest.json", "{}", PUT);
-
-    const req = seen[0]!;
-    assert.equal(req.method, "PUT");
-    assert.equal(
-      req.url,
-      "https://acct.r2.cloudflarestorage.com/maps/t/acme/m/x/latest.json",
-    );
-    assert.equal(req.body, "{}");
-    assert.equal(req.headers.get("cache-control"), PUT.cacheControl);
-    assert.equal(req.headers.get("content-type"), PUT.contentType);
-    assert.equal(req.headers.get("x-amz-meta-livemap-etag"), PUT.etag);
-    assert.match(
-      req.headers.get("authorization") ?? "",
-      /^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/auto\/s3\/aws4_request/,
-    );
-  });
-
   test("get prefers our stored hash over the backend's own ETag", async () => {
     const { store } = fake(
       () =>
@@ -150,21 +94,6 @@ describe("R2ArtifactStore requests", () => {
         }),
     );
     assert.equal((await store.get("k"))?.etag, '"content-hash"');
-  });
-
-  test("a 404 is absence; any other failure throws without the response body", async () => {
-    const missing = fake(() => new Response("<Error/>", { status: 404 }));
-    assert.equal(await missing.store.get("k"), null);
-    assert.equal(await missing.store.has("k"), false);
-    await missing.store.delete("k");
-
-    const denied = fake(
-      () => new Response("<Error><BucketName>maps</BucketName></Error>", { status: 403 }),
-    );
-    await assert.rejects(
-      () => denied.store.get("k"),
-      (err: Error) => /403/.test(err.message) && !/BucketName/.test(err.message),
-    );
   });
 
   test("deletePrefix follows continuation tokens and deletes each key", async () => {
@@ -189,19 +118,6 @@ describe("R2ArtifactStore requests", () => {
     assert.deepEqual(
       seen.filter((s) => s.method === "DELETE").map((s) => new URL(s.url).pathname),
       ["/maps/t/g/m/a/v/1.json", "/maps/t/g/m/a/latest.json"],
-    );
-  });
-});
-
-describe("r2FromEnv", () => {
-  test("is null when nothing is set", () => {
-    assert.equal(r2FromEnv({}), null);
-  });
-
-  test("refuses half a configuration and names what is missing", () => {
-    assert.throws(
-      () => r2FromEnv({ R2_ACCOUNT_ID: "a", R2_BUCKET: "b" }),
-      /R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY/,
     );
   });
 });

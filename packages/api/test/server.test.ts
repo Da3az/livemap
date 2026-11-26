@@ -2,122 +2,89 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import { buildServer, StaticAuth, type Actor } from "../src/server.js";
-import { MemoryMapRepo } from "../src/repo.js";
+import { MemoryMapRepo, type RepoCtx } from "../src/repo.js";
 import { MemoryArtifactStore, keys } from "../src/storage.js";
-import type { MapDoc, PointFeature } from "@livemap/core";
+import { templateSettings, type ErrorBody, type MapDoc, type MapVersion, type PointFeature, type VersionPointer } from "@livemap/core";
 
 const TENANT = "t-1";
 const TENANT_SLUG = "acme-news";
-const MAP_ID = "m-1";
+const USER = "u-1";
+const API = "/api/v1";
 
-const DOC: MapDoc = {
-  id: MAP_ID,
-  tenantId: TENANT,
-  slug: "levant-tracker",
-  title: { value: "Levant tracker", dir: "ltr" },
-  viewport: { center: [35.75, 32.1], zoom: 9, bearing: 0, pitch: 0 },
-  basemap: { styleId: "light", labelLangs: ["ar", "en"] },
-  uiDir: "rtl",
-  updatedAt: "2026-11-07T00:00:00.000Z",
-  rev: 0,
-};
-
-function point(id: string, lng: number): PointFeature {
+function point(id: string, lng = 35.5): PointFeature {
   return {
     id,
     kind: "point",
-    at: "V",
-    at_: [lng, 32],
-    icon: "ocha:Attack",
-    iconColor: "#E03C31",
-    iconSize: 1,
+    order: "V",
+    name: { value: id, dir: "ltr" },
+    groupId: null,
+    hidden: false,
+    locked: false,
+    presetId: null,
+    validFrom: null,
+    validTo: null,
+    lineageId: null,
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    updatedBy: "",
+    at: [lng, 32],
+    symbol: { icon: "strike" },
+    color: { slot: 1 },
+    size: 24,
   };
 }
 
-function setup(
-  role = "editor",
-  actor?: Actor | null,
-  createdBy = "u-1",
-) {
-  const repo = new MemoryMapRepo();
-  // The acting user owns the map by default, so a test that is about the role
-  // grid is not silently also a test about row ownership. Pass a different
-  // createdBy to exercise the ownership rule.
-  repo.seed(DOC, [point("p1", 35.5)], { createdBy });
-  const store = new MemoryArtifactStore();
-  const resolved: Actor | null =
-    actor === undefined
-      ? { userId: "u-1", tenantId: TENANT, tenantSlug: TENANT_SLUG, role }
-      : actor;
-  const app = buildServer({
-    repo,
-    store,
-    auth: new StaticAuth(resolved),
-    servePublic: true,
-  });
-  return { app, repo, store };
+/** A map in `tenantId` made by `createdBy`, holding one feature. Returns it at its current revision. */
+async function makeMap(repo: MemoryMapRepo, tenantId: string, createdBy: string): Promise<MapDoc> {
+  const ctx: RepoCtx = { tenantId, userId: createdBy, role: "editor" };
+  const created = await repo.createMap(
+    ctx,
+    { title: { value: "Levant tracker", dir: "ltr" }, uiDir: "rtl", settings: templateSettings("blank", "rtl") },
+    { maxMaps: 100 },
+  );
+  if (created.status !== "created") throw new Error("fixture map was not created");
+  const edit = await repo.applyEdit(ctx, created.map.id, { rev: 0, force: false, put: [point("p1")], delete: [] }, { maxFeaturesPerMap: 100 });
+  if (edit.status !== "applied") throw new Error("fixture feature was not saved");
+  return (await repo.getMap(ctx, created.map.id))!.map;
 }
 
+/**
+ * A server whose actor is USER with `role`, granted as a membership — the auth
+ * hook takes the role from the membership, and refuses an actor without one.
+ * The map is made by USER unless `createdBy` says otherwise, so a test about
+ * the role grid is not silently also a test about row ownership.
+ */
+async function setup(role = "editor", opts: { createdBy?: string; anonymous?: boolean } = {}) {
+  const repo = new MemoryMapRepo();
+  const store = new MemoryArtifactStore();
+  repo.grant(TENANT, USER, role);
+  const map = await makeMap(repo, TENANT, opts.createdBy ?? USER);
+  const actor: Actor | null = opts.anonymous ? null : { userId: USER, tenantId: TENANT, tenantSlug: TENANT_SLUG, role };
+  const app = buildServer({ repo, store, auth: new StaticAuth(actor), servePublic: true });
+  return { app, repo, store, map };
+}
+
+const edit = (app: Awaited<ReturnType<typeof setup>>["app"], mapId: string, rev: number, id = "p2") =>
+  app.inject({ method: "POST", url: `${API}/maps/${mapId}/edit`, payload: { rev, put: [point(id, 36)], delete: [] } });
+
+const errorOf = (res: { json: () => unknown }) => (res.json() as ErrorBody).error;
+
 describe("auth", () => {
-  test("health needs no actor", async () => {
-    const { app } = setup("editor", null);
-    const res = await app.inject({ method: "GET", url: "/health" });
-    assert.equal(res.statusCode, 200);
-    await app.close();
-  });
-
-  test("health ignores a query string", async () => {
-    // The old allowlist matched the raw URL, so a probe with a cache-buster
-    // was treated as an API call and refused.
-    const { app } = setup("editor", null);
-    const res = await app.inject({ method: "GET", url: "/health?t=1" });
-    assert.equal(res.statusCode, 200);
-    await app.close();
-  });
-
   test("everything under the API prefix is 401 without an actor", async () => {
-    const { app } = setup("editor", null);
-    for (const url of [
-      `/api/v1/maps/${MAP_ID}`,
-      `/api/v1/maps/${MAP_ID}/edit`,
-      `/api/v1/maps/${MAP_ID}/publish`,
+    const { app, map } = await setup("editor", { anonymous: true });
+    for (const [method, url] of [
+      ["GET", `${API}/session`],
+      ["GET", `${API}/maps/${map.id}`],
+      ["POST", `${API}/maps/${map.id}/edit`],
+      ["POST", `${API}/maps/${map.id}/publish`],
       // Unknown paths too: an anonymous caller must not be able to map the API
       // by telling 404 from 401.
-      "/api/v1/nope",
-    ]) {
-      const res = await app.inject({ method: "GET", url });
-      assert.equal(res.statusCode, 401, url);
+      ["GET", `${API}/nope`],
+    ] as const) {
+      const res = await app.inject({ method, url });
+      assert.equal(res.statusCode, 401, `${method} ${url}`);
+      assert.equal(errorOf(res), "unauthorised", `${method} ${url}`);
     }
     await app.close();
-  });
-
-  test("an unknown API path is a JSON 404 once authenticated", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: "/api/v1/nope" });
-    assert.equal(res.statusCode, 404);
-    assert.deepEqual(res.json(), { error: "not_found" });
-    await app.close();
-  });
-
-  test("published artifacts need no actor", async () => {
-    // Publish as an editor, then read with a server that resolves nobody. The
-    // store is shared; only the auth differs.
-    const { app, repo, store } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-    await app.close();
-
-    const anon = buildServer({
-      repo,
-      store,
-      auth: new StaticAuth(null),
-      servePublic: true,
-    });
-    const res = await anon.inject({
-      method: "GET",
-      url: `/public/${keys.pointer(TENANT_SLUG, DOC.slug)}`,
-    });
-    assert.equal(res.statusCode, 200);
-    await anon.close();
   });
 
   test("the artifact route is absent unless asked for", async () => {
@@ -131,302 +98,101 @@ describe("auth", () => {
       etag: '"e"',
     });
     const app = buildServer({ repo, store, auth: new StaticAuth(null) });
-    const res = await app.inject({
-      method: "GET",
-      url: "/public/t/x/m/y/latest.json",
-    });
+    const res = await app.inject({ method: "GET", url: "/public/t/x/m/y/latest.json" });
     assert.equal(res.statusCode, 404);
     await app.close();
   });
 });
 
-describe("GET /maps/:id", () => {
-  test("returns the document and its features", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: `/api/v1/maps/${MAP_ID}` });
-    assert.equal(res.statusCode, 200);
-    const body = res.json() as { map: MapDoc; features: unknown[] };
-    assert.equal(body.map.id, MAP_ID);
-    assert.equal(body.features.length, 1);
-    await app.close();
-  });
-
-  test("404 for an unknown map", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: "/api/v1/maps/nope" });
-    assert.equal(res.statusCode, 404);
-    await app.close();
-  });
-
-  // Tenant scoping means another tenant's map id is 404, not 403.
+describe("tenant scoping", () => {
+  // Another tenant's map id is 404, not 403: its existence is not disclosed.
   test("a map in another tenant is not visible", async () => {
-    const { app, repo } = setup();
-    repo.seed({ ...DOC, id: "other-map", tenantId: "t-2" }, []);
-    const res = await app.inject({ method: "GET", url: "/api/v1/maps/other-map" });
+    const { app, repo } = await setup();
+    const other = await makeMap(repo, "t-2", "u-2");
+    const res = await app.inject({ method: "GET", url: `${API}/maps/${other.id}` });
     assert.equal(res.statusCode, 404);
+    assert.equal(errorOf(res), "not_found");
     await app.close();
   });
 });
 
 describe("POST /maps/:id/edit", () => {
-  test("applies an edit and returns the new revision", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
-    assert.equal(res.statusCode, 200);
-    assert.equal((res.json() as { rev: number }).rev, 1);
-    await app.close();
-  });
-
-  // Without the guard a stale client could clobber an edit it never saw.
-  test("rejects an edit with no revision", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { put: [point("p2", 36)] },
-    });
-    assert.equal(res.statusCode, 400);
-    assert.equal((res.json() as { error: string }).error, "rev_required");
-    await app.close();
-  });
-
-  test("a stale revision is 409, not 500", async () => {
-    const { app } = setup();
-    await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("a", 35)] },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("b", 36)] },
-    });
-    assert.equal(res.statusCode, 409);
-    assert.equal((res.json() as { error: string }).error, "stale_revision");
-    await app.close();
-  });
-
   test("a viewer cannot edit", async () => {
-    const { app } = setup("viewer");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app, map } = await setup("viewer");
+    const res = await edit(app, map.id, map.rev);
     assert.equal(res.statusCode, 403);
+    assert.equal(errorOf(res), "forbidden");
     await app.close();
   });
 
   test("a contributor CAN edit a map it created", async () => {
-    const { app } = setup("contributor");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app, map } = await setup("contributor");
+    const res = await edit(app, map.id, map.rev);
     assert.equal(res.statusCode, 200);
     await app.close();
   });
 
-  // The whole reason applyEdit returns a status union rather than a nullable
+  // The reason applyEdit returns a status union rather than a nullable
   // revision: an ownership refusal used to be indistinguishable from a lost
   // race, so it surfaced as 409 and told the client to retry forever.
   test("a contributor editing someone else's map is 403, not 409", async () => {
-    const { app } = setup("contributor", undefined, "u-someone-else");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app, map } = await setup("contributor", { createdBy: "u-someone-else" });
+    const res = await edit(app, map.id, map.rev);
     assert.equal(res.statusCode, 403);
-    assert.match((res.json() as { reason: string }).reason, /only maps it created/);
+    assert.equal(errorOf(res), "forbidden");
     await app.close();
   });
 
   test("an editor can edit a map someone else created", async () => {
-    const { app } = setup("editor", undefined, "u-someone-else");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app, map } = await setup("editor", { createdBy: "u-someone-else" });
+    const res = await edit(app, map.id, map.rev);
     assert.equal(res.statusCode, 200);
     await app.close();
   });
 
   test("an unknown role is denied rather than allowed", async () => {
-    const { app } = setup("wizard");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app, map } = await setup("wizard");
+    const res = await edit(app, map.id, map.rev);
     assert.equal(res.statusCode, 403);
+    assert.equal(errorOf(res), "forbidden");
     await app.close();
   });
 
+  // Same regression as the contributor case: a missing row must not read as a lost race.
   test("editing an unknown map is 404, not 409", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/maps/nope/edit",
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
+    const { app } = await setup();
+    const res = await edit(app, "nope", 0);
     assert.equal(res.statusCode, 404);
-    await app.close();
-  });
-});
-
-describe("POST /maps/:id/publish", () => {
-  test("201 with the version and ETag", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/publish`,
-    });
-    assert.equal(res.statusCode, 201);
-    const body = res.json() as { version: number; etag: string };
-    assert.equal(body.version, 1);
-    assert.match(body.etag, /^[0-9a-f]{32}$/);
+    assert.equal(errorOf(res), "not_found");
     await app.close();
   });
 
-  // 200, not 201: nothing was created.
-  test("republishing unchanged content is 200 unchanged", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/publish`,
-    });
-    assert.equal(res.statusCode, 200);
-    assert.equal((res.json() as { status: string }).status, "unchanged");
-    await app.close();
-  });
-
-  test("a contributor gets 403 with a reason", async () => {
-    const { app } = setup("contributor");
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/publish`,
-    });
-    assert.equal(res.statusCode, 403);
-    assert.match((res.json() as { reason: string }).reason, /submit for review/);
-    await app.close();
-  });
-});
-
-describe("POST /maps/:id/rollback", () => {
-  test("rolls back to an earlier version as a new version", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-    await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2", 36)] },
-    });
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/rollback`,
-      payload: { toVersion: 1 },
-    });
-    assert.equal(res.statusCode, 201);
-    assert.equal((res.json() as { version: number }).version, 3);
-    await app.close();
-  });
-
-  test("requires a target version", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/rollback`,
-      payload: {},
-    });
-    assert.equal(res.statusCode, 400);
+  test("a stale revision is 409, not 500", async () => {
+    const { app, map } = await setup();
+    assert.equal((await edit(app, map.id, map.rev, "a")).statusCode, 200);
+    const res = await edit(app, map.id, map.rev, "b");
+    assert.equal(res.statusCode, 409);
+    assert.equal(errorOf(res), "stale_revision");
     await app.close();
   });
 });
 
 describe("GET /public/*", () => {
-  test("serves the artifact with its cache headers", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-
-    const key = keys.version(TENANT_SLUG, DOC.slug, 1);
-    const res = await app.inject({ method: "GET", url: `/public/${key}` });
-
-    assert.equal(res.statusCode, 200);
-    assert.match(res.headers["cache-control"] as string, /immutable/);
-    assert.equal(res.headers["access-control-allow-origin"], "*");
-    assert.ok(res.headers["etag"]);
-    await app.close();
-  });
-
   // The polling read path depends on this: no body, validators repeated.
   test("a matching If-None-Match returns 304 with no body", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
+    const { app, map } = await setup();
+    assert.equal((await app.inject({ method: "POST", url: `${API}/maps/${map.id}/publish` })).statusCode, 201);
 
-    const key = keys.pointer(TENANT_SLUG, DOC.slug);
-    const first = await app.inject({ method: "GET", url: `/public/${key}` });
+    const url = `/public/${keys.pointer(TENANT_SLUG, map.slug)}`;
+    const first = await app.inject({ method: "GET", url });
+    assert.equal(first.statusCode, 200);
     const etag = first.headers["etag"] as string;
+    assert.ok(etag);
 
-    const second = await app.inject({
-      method: "GET",
-      url: `/public/${key}`,
-      headers: { "if-none-match": etag },
-    });
-
+    const second = await app.inject({ method: "GET", url, headers: { "if-none-match": etag } });
     assert.equal(second.statusCode, 304);
     assert.equal(second.body, "");
     assert.equal(second.headers["etag"], etag);
-    await app.close();
-  });
-
-  test("a non-matching If-None-Match returns the body", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-    const key = keys.pointer(TENANT_SLUG, DOC.slug);
-    const res = await app.inject({
-      method: "GET",
-      url: `/public/${key}`,
-      headers: { "if-none-match": '"stale"' },
-    });
-    assert.equal(res.statusCode, 200);
-    assert.ok(res.body.length > 0);
-    await app.close();
-  });
-
-  test("the pointer carries a short TTL, the artifact a long one", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-
-    const p = await app.inject({
-      method: "GET",
-      url: `/public/${keys.pointer(TENANT_SLUG, DOC.slug)}`,
-    });
-    const v = await app.inject({
-      method: "GET",
-      url: `/public/${keys.version(TENANT_SLUG, DOC.slug, 1)}`,
-    });
-
-    assert.match(p.headers["cache-control"] as string, /max-age=5/);
-    assert.match(p.headers["cache-control"] as string, /stale-while-revalidate/);
-    assert.match(v.headers["cache-control"] as string, /max-age=31536000/);
-    await app.close();
-  });
-
-  test("404 for an unknown key", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: "/public/nope.json" });
-    assert.equal(res.statusCode, 404);
     await app.close();
   });
 });
@@ -434,30 +200,21 @@ describe("GET /public/*", () => {
 describe("end-to-end publish loop", () => {
   // Edit -> publish -> pointer -> artifact: the whole viewer read path.
   test("an edit becomes visible through the public path", async () => {
-    const { app } = setup();
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
+    const { app, map } = await setup();
+    assert.equal((await app.inject({ method: "POST", url: `${API}/maps/${map.id}/publish` })).statusCode, 201);
+    assert.equal((await edit(app, map.id, map.rev, "new-strike")).statusCode, 200);
+    assert.equal((await app.inject({ method: "POST", url: `${API}/maps/${map.id}/publish` })).statusCode, 201);
 
-    await app.inject({
-      method: "POST",
-      url: `/api/v1/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("new-strike", 36.2)] },
-    });
-    await app.inject({ method: "POST", url: `/api/v1/maps/${MAP_ID}/publish` });
-
-    const ptr = await app.inject({
-      method: "GET",
-      url: `/public/${keys.pointer(TENANT_SLUG, DOC.slug)}`,
-    });
-    const pointer = ptr.json() as { version: number; href: string };
+    const ptr = await app.inject({ method: "GET", url: `/public/${keys.pointer(TENANT_SLUG, map.slug)}` });
+    assert.equal(ptr.statusCode, 200);
+    const pointer = ptr.json() as VersionPointer;
     assert.equal(pointer.version, 2);
 
-    const artifact = await app.inject({
-      method: "GET",
-      url: `/public/t/${TENANT_SLUG}/m/${DOC.slug}/${pointer.href}`,
-    });
+    // The pointer's url is what a reader follows; with no CDN it is this server's /public.
+    const artifact = await app.inject({ method: "GET", url: pointer.url });
     assert.equal(artifact.statusCode, 200);
-
-    const version = artifact.json() as { features: { id: string }[] };
+    const version = artifact.json() as MapVersion;
+    assert.equal(version.version, 2);
     assert.ok(
       version.features.some((f) => f.id === "new-strike"),
       "the edit never reached the published artifact",

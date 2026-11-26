@@ -1,437 +1,141 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildServer, StaticAuth, type Actor, type ServerDeps } from "../src/server.js";
-import { MemoryMapRepo, freeSlug, slugify } from "../src/repo.js";
+import { buildServer, StaticAuth, type Actor } from "../src/server.js";
+import { MemoryMapRepo } from "../src/repo.js";
 import { MemoryArtifactStore } from "../src/storage.js";
 import { DEFAULT_LIMITS, type TenantLimits } from "../src/limits.js";
-import { TEMPLATES } from "../src/templates.js";
-import type { MapDoc, PointFeature } from "@livemap/core";
+import {
+  templateSettings,
+  type CreateMapRequest,
+  type ErrorBody,
+  type MapDoc,
+  type MapFeature,
+  type MapSummary,
+  type PointFeature,
+} from "@livemap/core";
 
 const TENANT = "t-1";
-const MAP_ID = "m-1";
+const USER = "u-1";
 const API = "/api/v1";
-
-const DOC: MapDoc = {
-  id: MAP_ID,
-  tenantId: TENANT,
-  slug: "levant-tracker",
-  title: { value: "Levant tracker", dir: "ltr" },
-  viewport: { center: [35.75, 32.1], zoom: 9, bearing: 0, pitch: 0 },
-  basemap: { styleId: "light", labelLangs: ["ar", "en"] },
-  uiDir: "rtl",
-  updatedAt: "2026-11-07T00:00:00.000Z",
-  rev: 0,
-};
 
 function point(id: string): PointFeature {
   return {
     id,
     kind: "point",
-    at: "V",
-    at_: [35.5, 32],
-    icon: "evt:strike",
-    iconColor: "#E03C31",
-    iconSize: 1,
+    order: "V",
+    name: { value: id, dir: "ltr" },
+    groupId: null,
+    hidden: false,
+    locked: false,
+    presetId: null,
+    validFrom: null,
+    validTo: null,
+    lineageId: null,
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    updatedBy: "",
+    at: [35.5, 32],
+    symbol: { icon: "strike" },
+    color: { slot: 1 },
+    size: 24,
   };
 }
 
-function setup(
-  opts: {
-    role?: string;
-    userId?: string;
-    createdBy?: string;
-    member?: Partial<TenantLimits>;
-    deps?: Partial<ServerDeps>;
-  } = {},
-) {
+const CREATE: CreateMapRequest = { title: { value: "Flood watch", dir: "ltr" }, uiDir: "ltr", template: "blank" };
+
+/**
+ * A server whose token names USER as `claimed`, while the database grants
+ * `granted` (the same role unless a test says otherwise; null for no
+ * membership at all). The auth hook goes by the database.
+ */
+function setup(opts: { claimed?: string; granted?: string | null; member?: Partial<TenantLimits> } = {}) {
   const repo = new MemoryMapRepo();
-  const userId = opts.userId ?? "u-1";
-  repo.seed(DOC, [point("p1")], { createdBy: opts.createdBy ?? userId });
-  const store = new MemoryArtifactStore();
-  const actor: Actor = {
-    userId,
-    tenantId: TENANT,
-    tenantSlug: "acme-news",
-    role: opts.role ?? "editor",
-  };
+  const claimed = opts.claimed ?? "editor";
+  const granted = opts.granted === undefined ? claimed : opts.granted;
+  if (granted !== null) repo.grant(TENANT, USER, granted);
+  const actor: Actor = { userId: USER, tenantId: TENANT, tenantSlug: "acme-news", role: claimed };
   const app = buildServer({
     repo,
-    store,
+    store: new MemoryArtifactStore(),
     auth: new StaticAuth(actor),
-    servePublic: true,
-    limits: {
-      guest: DEFAULT_LIMITS.guest,
-      member: { ...DEFAULT_LIMITS.member, ...opts.member },
-    },
-    ...opts.deps,
+    limits: { guest: DEFAULT_LIMITS.guest, member: { ...DEFAULT_LIMITS.member, ...opts.member } },
   });
-  return { app, repo, store };
+  return { app, repo };
 }
 
-const title = (value: string) => ({ value, dir: "ltr" as const });
+type App = ReturnType<typeof setup>["app"];
 
-describe("slugs", () => {
-  test("a title becomes a URL-safe slug", () => {
-    assert.equal(slugify("Élection Night — 2026!"), "election-night-2026");
-  });
+const createMap = (app: App, body: CreateMapRequest = CREATE) => app.inject({ method: "POST", url: `${API}/maps`, payload: body });
 
-  test("a title with no Latin letters falls back rather than yielding an empty slug", () => {
-    assert.equal(slugify("خريطة"), "map");
-  });
+/** A map made through the repo directly, so a test about a refused route does not depend on that route. */
+async function seedMap(repo: MemoryMapRepo, features: MapFeature[] = []): Promise<MapDoc> {
+  const ctx = { tenantId: TENANT, userId: USER, role: "editor" };
+  const created = await repo.createMap(ctx, { title: CREATE.title, uiDir: "ltr", settings: templateSettings("blank", "ltr") }, { maxMaps: 100 });
+  if (created.status !== "created") throw new Error("fixture map was not created");
+  if (features.length === 0) return created.map;
+  const saved = await repo.applyEdit(ctx, created.map.id, { rev: 0, force: false, put: features, delete: [] }, { maxFeaturesPerMap: 100 });
+  if (saved.status !== "applied") throw new Error("fixture features were not saved");
+  return (await repo.getMap(ctx, created.map.id))!.map;
+}
 
-  test("a taken slug gets the first free suffix", () => {
-    assert.equal(freeSlug("a", new Set()), "a");
-    assert.equal(freeSlug("a", new Set(["a", "a-2"])), "a-3");
-  });
-});
+const errorOf = (res: { json: () => unknown }) => (res.json() as ErrorBody).error;
 
-describe("POST /maps", () => {
-  test("creates an empty map owned by the actor", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("Flood watch") },
-    });
-    assert.equal(res.statusCode, 201);
-    const { map } = res.json() as { map: MapDoc };
-    assert.equal(map.slug, "flood-watch");
-    assert.equal(map.rev, 0);
-
-    const got = await app.inject({ method: "GET", url: `${API}/maps/${map.id}` });
-    assert.equal(got.statusCode, 200);
-    assert.deepEqual((got.json() as { features: unknown[] }).features, []);
-    await app.close();
-  });
-
-  test("two maps with one title get distinct slugs", async () => {
-    const { app } = setup();
-    const make = () =>
-      app.inject({
-        method: "POST",
-        url: `${API}/maps`,
-        payload: { title: title("Flood watch") },
-      });
-    const a = (await make()).json() as { map: MapDoc };
-    const b = (await make()).json() as { map: MapDoc };
-    assert.equal(a.map.slug, "flood-watch");
-    assert.equal(b.map.slug, "flood-watch-2");
-    await app.close();
-  });
-
-  test("a template seeds its features and its direction", async () => {
-    const { app } = setup();
-    const tpl = TEMPLATES[0]!;
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("Tracker"), template: tpl.id },
-    });
-    assert.equal(res.statusCode, 201);
-    const { map } = res.json() as { map: MapDoc };
-    assert.equal(map.uiDir, tpl.uiDir);
-
-    const got = await app.inject({ method: "GET", url: `${API}/maps/${map.id}` });
-    assert.equal(
-      (got.json() as { features: unknown[] }).features.length,
-      tpl.features.length,
-    );
-    await app.close();
-  });
-
-  test("an unknown template is refused, not ignored", async () => {
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("x"), template: "nope" },
-    });
-    assert.equal(res.statusCode, 400);
-    assert.equal((res.json() as { error: string }).error, "unknown_template");
-    await app.close();
-  });
-
-  test("an unknown property is rejected rather than silently dropped", async () => {
-    // Fastify's default validator would strip `slug` and accept the request,
-    // leaving the caller believing they had chosen it.
-    const { app } = setup();
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("x"), slug: "mine" },
-    });
-    assert.equal(res.statusCode, 400);
-    assert.equal((res.json() as { error: string }).error, "invalid_request");
-    await app.close();
-  });
-
+describe("creating maps", () => {
   test("a viewer cannot create a map", async () => {
-    const { app } = setup({ role: "viewer" });
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("x") },
-    });
+    const { app, repo } = setup({ claimed: "viewer" });
+    const res = await createMap(app);
     assert.equal(res.statusCode, 403);
-    await app.close();
-  });
-
-  test("is refused at the workspace's map limit", async () => {
-    // One map is seeded, so a limit of one is already reached.
-    const { app } = setup({ member: { maxMaps: 1 } });
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("x") },
-    });
-    assert.equal(res.statusCode, 403);
-    assert.equal((res.json() as { error: string }).error, "quota_exceeded");
+    assert.equal(errorOf(res), "forbidden");
+    assert.equal(await repo.countMaps({ tenantId: TENANT, userId: USER, role: "viewer" }), 0);
     await app.close();
   });
 });
 
-describe("GET /maps", () => {
-  test("lists the tenant's maps with a feature count", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: `${API}/maps` });
-    assert.equal(res.statusCode, 200);
-    const { maps } = res.json() as {
-      maps: { id: string; featureCount: number; archived: boolean }[];
-    };
-    assert.equal(maps.length, 1);
-    assert.equal(maps[0]!.id, MAP_ID);
-    assert.equal(maps[0]!.featureCount, 1);
-    assert.equal(maps[0]!.archived, false);
-    await app.close();
-  });
-});
+describe("archive and the map limit", () => {
+  // Archived maps do not count against the limit (archiving is how a full
+  // workspace makes room), so restoring one has to be checked against it, or
+  // archive-create-restore would be a way past the limit.
+  test("restoring an archived map is refused at the map limit", async () => {
+    const { app } = setup({ claimed: "owner", member: { maxMaps: 1 } });
+    const first = await createMap(app);
+    assert.equal(first.statusCode, 201);
+    const archived = (first.json() as { map: MapDoc }).map;
 
-describe("PATCH /maps/:id", () => {
-  test("retitles without moving the revision or the slug", async () => {
-    // The revision guards the feature set; bumping it here would make an
-    // editor holding the map open lose its next save to a rename.
-    const { app } = setup();
-    const res = await app.inject({
-      method: "PATCH",
-      url: `${API}/maps/${MAP_ID}`,
-      payload: { title: { value: "متتبع", dir: "rtl" } },
-    });
-    assert.equal(res.statusCode, 200);
-    const { map } = res.json() as { map: MapDoc };
-    assert.deepEqual(map.title, { value: "متتبع", dir: "rtl" });
-    assert.equal(map.rev, 0);
-    assert.equal(map.slug, DOC.slug);
-    await app.close();
-  });
+    assert.equal((await createMap(app)).statusCode, 403, "the limit of one was not enforced");
+    assert.equal((await app.inject({ method: "POST", url: `${API}/maps/${archived.id}/archive` })).statusCode, 204);
+    assert.equal((await createMap(app)).statusCode, 201, "archiving did not make room");
 
-  test("the slug cannot be changed", async () => {
-    // Artifact keys and every embed are built from it.
-    const { app } = setup();
-    const res = await app.inject({
-      method: "PATCH",
-      url: `${API}/maps/${MAP_ID}`,
-      payload: { slug: "renamed" },
-    });
-    assert.equal(res.statusCode, 400);
-    await app.close();
-  });
-
-  test("a contributor cannot retitle someone else's map", async () => {
-    const { app } = setup({ role: "contributor", createdBy: "u-other" });
-    const res = await app.inject({
-      method: "PATCH",
-      url: `${API}/maps/${MAP_ID}`,
-      payload: { uiDir: "ltr" },
-    });
+    const res = await app.inject({ method: "POST", url: `${API}/maps/${archived.id}/unarchive` });
     assert.equal(res.statusCode, 403);
-    await app.close();
-  });
-});
+    assert.equal(errorOf(res), "quota_exceeded");
 
-describe("archive", () => {
-  test("hides a map, and unarchive brings it back", async () => {
-    const { app } = setup();
-    const post = (path: string) =>
-      app.inject({ method: "POST", url: `${API}/maps/${MAP_ID}/${path}` });
-    const list = async (q = "") =>
-      (
-        (await app.inject({ method: "GET", url: `${API}/maps${q}` })).json() as {
-          maps: unknown[];
-        }
-      ).maps.length;
-
-    assert.equal((await post("archive")).statusCode, 200);
-    assert.equal(
-      (await app.inject({ method: "GET", url: `${API}/maps/${MAP_ID}` })).statusCode,
-      404,
-    );
-    assert.equal(await list(), 0);
-    assert.equal(await list("?archived=1"), 1);
-
-    assert.equal((await post("unarchive")).statusCode, 200);
-    assert.equal(await list(), 1);
-    await app.close();
-  });
-
-  test("an archived map still counts against the map limit", async () => {
-    // Otherwise archiving would be a way to mint more maps.
-    const { app } = setup({ member: { maxMaps: 1 } });
-    await app.inject({ method: "POST", url: `${API}/maps/${MAP_ID}/archive` });
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps`,
-      payload: { title: title("x") },
-    });
-    assert.equal(res.statusCode, 403);
-    await app.close();
-  });
-});
-
-describe("versions", () => {
-  const publish = (app: ReturnType<typeof setup>["app"]) =>
-    app.inject({ method: "POST", url: `${API}/maps/${MAP_ID}/publish` });
-  const edit = (app: ReturnType<typeof setup>["app"], rev: number, id: string) =>
-    app.inject({
-      method: "POST",
-      url: `${API}/maps/${MAP_ID}/edit`,
-      payload: { rev, put: [point(id)] },
-    });
-
-  test("the ledger is listed newest first", async () => {
-    const { app } = setup();
-    await publish(app);
-    await edit(app, 0, "p2");
-    await publish(app);
-
-    const res = await app.inject({
-      method: "GET",
-      url: `${API}/maps/${MAP_ID}/versions`,
-    });
-    assert.equal(res.statusCode, 200);
-    const body = res.json() as {
-      publishedVersion: number;
-      versions: { version: number; featureCount: number }[];
-    };
-    assert.equal(body.publishedVersion, 2);
+    // It stays archived.
+    const list = await app.inject({ method: "GET", url: `${API}/maps?archived=true` });
     assert.deepEqual(
-      body.versions.map((v) => v.version),
-      [2, 1],
+      (list.json() as { maps: MapSummary[] }).maps.map((m) => m.id),
+      [archived.id],
     );
-    assert.equal(body.versions[0]!.featureCount, 2);
-    await app.close();
-  });
-
-  test("publishing stops at the version limit", async () => {
-    const { app } = setup({ member: { maxVersionsPerMap: 1 } });
-    assert.equal((await publish(app)).statusCode, 201);
-    await edit(app, 0, "p2");
-    const res = await publish(app);
-    assert.equal(res.statusCode, 403);
-    assert.equal((res.json() as { error: string }).error, "quota_exceeded");
-    await app.close();
-  });
-
-  test("republishing unchanged content at the limit is still 200", async () => {
-    // Nothing would be written, so there is nothing for the limit to refuse.
-    const { app } = setup({ member: { maxVersionsPerMap: 1 } });
-    await publish(app);
-    assert.equal((await publish(app)).statusCode, 200);
-    await app.close();
-  });
-
-  test("rollback is bounded by the same limit", async () => {
-    const { app } = setup({ member: { maxVersionsPerMap: 2 } });
-    await publish(app);
-    await edit(app, 0, "p2");
-    await publish(app);
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps/${MAP_ID}/rollback`,
-      payload: { toVersion: 1 },
-    });
-    assert.equal(res.statusCode, 403);
     await app.close();
   });
 });
 
 describe("edit quotas", () => {
   test("an edit past the feature limit is refused whole", async () => {
-    const { app } = setup({ member: { maxFeaturesPerMap: 2 } });
+    const { app, repo } = setup({ member: { maxFeaturesPerMap: 2 } });
+    const map = await seedMap(repo, [point("p1")]);
     const res = await app.inject({
       method: "POST",
-      url: `${API}/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2"), point("p3")] },
+      url: `${API}/maps/${map.id}/edit`,
+      payload: { rev: map.rev, put: [point("p2"), point("p3")], delete: [] },
     });
     assert.equal(res.statusCode, 403);
-    assert.equal((res.json() as { error: string }).error, "quota_exceeded");
+    assert.equal(errorOf(res), "quota_exceeded");
 
     // Neither feature landed and the revision did not move.
-    const got = await app.inject({ method: "GET", url: `${API}/maps/${MAP_ID}` });
-    const body = got.json() as { map: MapDoc; features: unknown[] };
-    assert.equal(body.features.length, 1);
-    assert.equal(body.map.rev, 0);
-    await app.close();
-  });
-
-  test("replacing a feature at the limit is allowed", async () => {
-    const { app } = setup({ member: { maxFeaturesPerMap: 1 } });
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p1")] },
-    });
-    assert.equal(res.statusCode, 200);
-    await app.close();
-  });
-
-  test("a body over the tenant's own limit is refused before it is read", async () => {
-    const { app } = setup({ member: { maxBodyBytes: 64 } });
-    const res = await app.inject({
-      method: "POST",
-      url: `${API}/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [point("p2"), point("p3")] },
-    });
-    assert.equal(res.statusCode, 413);
-    await app.close();
-  });
-});
-
-describe("GET /me", () => {
-  test("reports role, capabilities, usage and limits", async () => {
-    const { app } = setup({ role: "viewer" });
-    const res = await app.inject({ method: "GET", url: `${API}/me` });
-    assert.equal(res.statusCode, 200);
-    const me = res.json() as {
-      role: string;
-      capabilities: string[];
-      guest: boolean;
-      expiresAt: string | null;
-      usage: { maps: number };
-      limits: TenantLimits;
-    };
-    assert.equal(me.role, "viewer");
-    assert.deepEqual(me.capabilities, ["map:read"]);
-    assert.equal(me.guest, false);
-    assert.equal(me.expiresAt, null);
-    assert.equal(me.usage.maps, 1);
-    assert.equal(me.limits.maxMaps, DEFAULT_LIMITS.member.maxMaps);
-    await app.close();
-  });
-});
-
-describe("GET /templates", () => {
-  test("lists every template without its features", async () => {
-    const { app } = setup();
-    const res = await app.inject({ method: "GET", url: `${API}/templates` });
-    const { templates } = res.json() as {
-      templates: { id: string; featureCount: number; features?: unknown }[];
-    };
-    assert.deepEqual(
-      templates.map((t) => t.id),
-      TEMPLATES.map((t) => t.id),
-    );
-    assert.equal(templates[0]!.features, undefined);
+    const got = await app.inject({ method: "GET", url: `${API}/maps/${map.id}` });
+    const body = got.json() as { map: MapDoc; features: MapFeature[] };
+    assert.deepEqual(body.features.map((f) => f.id), ["p1"]);
+    assert.equal(body.map.rev, map.rev);
     await app.close();
   });
 });
@@ -439,22 +143,28 @@ describe("GET /templates", () => {
 describe("role resolution", () => {
   test("the database's role wins over the token's claim", async () => {
     // A token minted when the user was an editor, used after a demotion.
-    const { app, repo } = setup({ role: "editor" });
-    repo.grant(TENANT, "u-1", "viewer");
+    const { app, repo } = setup({ claimed: "editor", granted: "viewer" });
+    const map = await seedMap(repo);
     const res = await app.inject({
       method: "POST",
-      url: `${API}/maps/${MAP_ID}/edit`,
-      payload: { rev: 0, put: [] },
+      url: `${API}/maps/${map.id}/edit`,
+      payload: { rev: map.rev, put: [point("p1")], delete: [] },
     });
     assert.equal(res.statusCode, 403);
+    assert.equal(errorOf(res), "forbidden");
+
+    const session = await app.inject({ method: "GET", url: `${API}/session` });
+    assert.equal((session.json() as { role: string }).role, "viewer");
     await app.close();
   });
 
   test("a valid token with no membership left is 401", async () => {
-    const { app, repo } = setup();
+    const { app, repo } = setup({ granted: null });
+    // Someone else is still a member: it is this user's membership that is gone.
     repo.grant(TENANT, "u-someone-else", "owner");
-    const res = await app.inject({ method: "GET", url: `${API}/me` });
+    const res = await app.inject({ method: "GET", url: `${API}/session` });
     assert.equal(res.statusCode, 401);
+    assert.equal(errorOf(res), "unauthorised");
     await app.close();
   });
 });

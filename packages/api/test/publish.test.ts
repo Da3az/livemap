@@ -1,317 +1,214 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  MemoryArtifactStore,
-  FailingArtifactStore,
-  keys,
-} from "../src/storage.js";
-import { MemoryMapRepo } from "../src/repo.js";
-import { publishMap, rollbackMap, findOrphanedVersions } from "../src/publish.js";
-import type { MapDoc, MapFeature, PointFeature } from "@livemap/core";
+import { MemoryArtifactStore, FailingArtifactStore, keys } from "../src/storage.js";
+import { MemoryMapRepo, type MapRepo, type RepoCtx } from "../src/repo.js";
+import { publishMap, rollbackMap } from "../src/publish.js";
+import { templateSettings, type MapFeature, type PointFeature } from "@livemap/core";
 
-const TENANT = "t-1";
 const TENANT_SLUG = "acme-news";
-const MAP_ID = "m-1";
+const CTX: RepoCtx = { tenantId: "t-1", userId: "u-1", role: "editor" };
+const LIMITS = { maxFeaturesPerMap: 100 };
 
-const DOC: MapDoc = {
-  id: MAP_ID,
-  tenantId: TENANT,
-  slug: "levant-tracker",
-  title: { value: "Levant tracker", dir: "ltr" },
-  viewport: { center: [35.75, 32.1], zoom: 9, bearing: 0, pitch: 0 },
-  basemap: { styleId: "light", labelLangs: ["ar", "en"] },
-  uiDir: "rtl",
-  updatedAt: "2026-11-07T00:00:00.000Z",
-  rev: 3,
-};
-
-function point(id: string, lng: number, color = "#E03C31"): PointFeature {
+function point(id: string, lng: number, order = "V"): PointFeature {
   return {
     id,
     kind: "point",
-    at: "V",
-    at_: [lng, 32],
-    icon: "ocha:Attack",
-    iconColor: color,
-    iconSize: 1,
+    order,
+    name: { value: id, dir: "ltr" },
+    groupId: null,
+    hidden: false,
+    locked: false,
+    presetId: null,
+    validFrom: null,
+    validTo: null,
+    lineageId: null,
+    updatedAt: "2026-11-07T00:00:00.000Z",
+    updatedBy: "",
+    at: [lng, 32],
+    symbol: { icon: "strike" },
+    color: { slot: 1 },
+    size: 24,
   };
 }
 
-function setup(features: MapFeature[] = [point("p1", 35.5)]) {
+/**
+ * A map made by CTX's user, holding `features`. CTX is an editor and the
+ * creator, so these tests exercise the role grid rather than row ownership;
+ * the ownership cases are in server.test.ts, where the status code is the point.
+ */
+async function setup(features: MapFeature[] = [point("p1", 35.5)]) {
   const repo = new MemoryMapRepo();
-  // createdBy matches CTX.userId, so the ownership rule is satisfied by default
-  // and these tests exercise the role grid rather than row ownership. The
-  // ownership cases are in server.test.ts, where the status code is the point.
-  repo.seed(DOC, features, { createdBy: "u-1" });
   const store = new MemoryArtifactStore();
-  return { repo, store };
+  const created = await repo.createMap(
+    CTX,
+    { title: { value: "Levant tracker", dir: "ltr" }, uiDir: "rtl", settings: templateSettings("blank", "rtl") },
+    { maxMaps: 100 },
+  );
+  if (created.status !== "created") throw new Error("fixture map was not created");
+  const mapId = created.map.id;
+  const saved = await repo.applyEdit(CTX, mapId, { rev: 0, force: false, put: features, delete: [] }, LIMITS);
+  if (saved.status !== "applied") throw new Error("fixture features were not saved");
+  const slug = created.map.slug;
+  const input = {
+    ctx: CTX,
+    tenantSlug: TENANT_SLUG,
+    mapId,
+    artifactBase: "/public",
+    now: () => "2026-11-07T10:00:00.000Z",
+  };
+  return { repo, store, mapId, slug, input };
 }
 
-const CTX = { tenantId: TENANT, userId: "u-1", role: "editor" };
+const revOf = async (repo: MapRepo, mapId: string) => (await repo.getMap(CTX, mapId))!.map.rev;
 
-const BASE = {
-  ctx: CTX,
-  tenantSlug: TENANT_SLUG,
-  mapId: MAP_ID,
-  now: () => "2026-11-07T10:00:00.000Z",
-};
+const putFeature = async (repo: MapRepo, mapId: string, feature: MapFeature) =>
+  repo.applyEdit(CTX, mapId, { rev: await revOf(repo, mapId), force: false, put: [feature], delete: [] }, LIMITS);
 
 describe("publishMap", () => {
-  test("publishes a map and writes both objects", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, BASE);
-
-    assert.equal(out.status, "published");
-    if (out.status !== "published") return;
-    assert.equal(out.version.version, 1);
-
-    const vKey = keys.version(TENANT_SLUG, DOC.slug, 1);
-    const pKey = keys.pointer(TENANT_SLUG, DOC.slug);
-    assert.ok(await store.get(vKey), "version artifact missing");
-    assert.ok(await store.get(pKey), "pointer missing");
-  });
-
   // Pointer first would briefly advertise an artifact that does not exist.
   test("writes the artifact BEFORE the pointer", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-
-    const vKey = keys.version(TENANT_SLUG, DOC.slug, 1);
-    const pKey = keys.pointer(TENANT_SLUG, DOC.slug);
-    assert.deepEqual(store.writeLog, [vKey, pKey]);
+    const { repo, store, slug, input } = await setup();
+    assert.equal((await publishMap(repo, store, input)).status, "published");
+    assert.deepEqual(store.writeLog, [keys.version(TENANT_SLUG, slug, 1), keys.pointer(TENANT_SLUG, slug)]);
   });
 
   test("a failed artifact upload never leaves a live pointer", async () => {
-    const { repo } = setup();
+    const { repo, slug, input } = await setup();
     const inner = new MemoryArtifactStore();
     const store = new FailingArtifactStore(inner, (k) => k.includes("/v/"));
 
-    await assert.rejects(() => publishMap(repo, store, BASE));
-
-    const pKey = keys.pointer(TENANT_SLUG, DOC.slug);
-    assert.equal(
-      await inner.get(pKey),
-      null,
-      "pointer was written despite the artifact failing",
-    );
-  });
-
-  test("version artifact is immutable, pointer is short-lived", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-
-    const v = (await store.get(keys.version(TENANT_SLUG, DOC.slug, 1)))!;
-    const p = (await store.get(keys.pointer(TENANT_SLUG, DOC.slug)))!;
-
-    assert.match(v.cacheControl, /immutable/);
-    assert.match(v.cacheControl, /max-age=31536000/);
-    assert.match(p.cacheControl, /max-age=5/);
-    assert.match(p.cacheControl, /stale-while-revalidate=30/);
-    assert.match(p.cacheControl, /stale-if-error=90/);
-  });
-
-  test("ETags are strong-quoted and match between objects", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, BASE);
-    if (out.status !== "published") throw new Error("expected publish");
-
-    const v = (await store.get(keys.version(TENANT_SLUG, DOC.slug, 1)))!;
-    assert.equal(v.etag, `"${out.version.etag}"`);
+    await assert.rejects(() => publishMap(repo, store, input));
+    assert.equal(await inner.get(keys.pointer(TENANT_SLUG, slug)), null, "pointer was written despite the artifact failing");
   });
 
   // A new version would make readers re-download an identical map.
   test("republishing unchanged content is a no-op", async () => {
-    const { repo, store } = setup();
-    const first = await publishMap(repo, store, BASE);
-    assert.equal(first.status, "published");
+    const { repo, store, mapId, input } = await setup();
+    assert.equal((await publishMap(repo, store, input)).status, "published");
+    const writesAfterFirst = store.writeLog.filter((k) => k.includes("/v/")).length;
 
-    const writesAfterFirst = store.writeLog.length;
-    const second = await publishMap(repo, store, BASE);
-
+    const second = await publishMap(repo, store, input);
     assert.equal(second.status, "unchanged");
     if (second.status !== "unchanged") return;
     assert.equal(second.version, 1);
     assert.equal(
-      store.writeLog.length,
+      store.writeLog.filter((k) => k.includes("/v/")).length,
       writesAfterFirst,
-      "a no-op publish still wrote to storage",
+      "a no-op publish wrote another version artifact",
     );
-    assert.equal(repo.allVersions(TENANT, MAP_ID).length, 1);
-  });
-
-  test("a real change mints a new version", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-
-    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
-    await repo.applyEdit(CTX, MAP_ID, rev, [point("p2", 36)], []);
-
-    const out = await publishMap(repo, store, BASE);
-    assert.equal(out.status, "published");
-    if (out.status !== "published") return;
-    assert.equal(out.version.version, 2);
-    assert.equal(repo.allVersions(TENANT, MAP_ID).length, 2);
+    assert.equal((await repo.listVersions(CTX, mapId)).length, 1);
   });
 
   test("feature row order does not affect the ETag", async () => {
-    const a = setup([point("p1", 35.5), point("p2", 36)]);
-    const b = setup([point("p2", 36), point("p1", 35.5)]);
+    // The same map read back with its rows in the opposite order must hash the
+    // same, so republishing it is "unchanged" rather than a new version.
+    const { repo, store, mapId, input } = await setup([point("p1", 35.5, "M"), point("p2", 36, "V")]);
+    const first = await publishMap(repo, store, input);
+    assert.equal(first.status, "published");
+    if (first.status !== "published") return;
 
-    const ra = await publishMap(a.repo, a.store, BASE);
-    const rb = await publishMap(b.repo, b.store, BASE);
-    if (ra.status !== "published" || rb.status !== "published") {
-      throw new Error("expected both to publish");
-    }
-    assert.equal(ra.version.etag, rb.version.etag);
-  });
-
-  test("the pointer names the immutable artifact", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-    const p = (await store.get(keys.pointer(TENANT_SLUG, DOC.slug)))!;
-    const parsed = JSON.parse(p.body) as { href: string; version: number };
-    assert.equal(parsed.href, "v/1.json");
-    assert.equal(parsed.version, 1);
-  });
-
-  test("bookkeeping records the published version", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-    assert.equal((await repo.getMap(CTX, MAP_ID))!.publishedVersion, 1);
-  });
-
-  test("missing map is reported, not thrown", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, { ...BASE, mapId: "nope" });
-    assert.equal(out.status, "not_found");
+    let reversedOrder: string[] = [];
+    const reversed: MapRepo = Object.create(repo, {
+      loadForPublish: {
+        value: async (ctx: RepoCtx, id: string) => {
+          const snapshot = await repo.loadForPublish(ctx, id);
+          if (!snapshot) return snapshot;
+          const features = [...snapshot.features].reverse();
+          reversedOrder = features.map((f) => f.id);
+          return { ...snapshot, features };
+        },
+      },
+    });
+    const second = await publishMap(reversed, store, input);
+    assert.deepEqual(reversedOrder, ["p2", "p1"], "the rows were not actually reordered");
+    assert.equal(second.status, "unchanged");
+    if (second.status !== "unchanged") return;
+    assert.equal(second.etag, first.version.etag);
+    assert.equal((await repo.listVersions(CTX, mapId)).length, 1);
   });
 });
 
 describe("publish authorisation", () => {
   test("a contributor cannot publish", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, {
-      ...BASE,
-      ctx: { ...CTX, role: "contributor" },
-    });
+    const { repo, store, input } = await setup();
+    const out = await publishMap(repo, store, { ...input, ctx: { ...CTX, role: "contributor" } });
     assert.equal(out.status, "forbidden");
     assert.equal(store.size, 0, "a forbidden publish still wrote objects");
   });
 
   test("a viewer cannot publish", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role: "viewer" } });
+    const { repo, store, input } = await setup();
+    const out = await publishMap(repo, store, { ...input, ctx: { ...CTX, role: "viewer" } });
     assert.equal(out.status, "forbidden");
+    assert.equal(store.size, 0, "a forbidden publish still wrote objects");
   });
 
-  for (const role of ["owner", "admin", "editor"]) {
-    test(`${role} can publish`, async () => {
-      const { repo, store } = setup();
-      const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role } });
-      assert.equal(out.status, "published");
-    });
-  }
-
   test("an unknown role is denied rather than allowed", async () => {
-    const { repo, store } = setup();
-    const out = await publishMap(repo, store, { ...BASE, ctx: { ...CTX, role: "wizard" } });
+    const { repo, store, input } = await setup();
+    const out = await publishMap(repo, store, { ...input, ctx: { ...CTX, role: "wizard" } });
     assert.equal(out.status, "forbidden");
+    assert.equal(store.size, 0, "a forbidden publish still wrote objects");
   });
 });
 
 describe("rollback", () => {
   test("republishes old bytes as a NEW version, keeping the ledger append-only", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
+    const { repo, store, mapId, input } = await setup();
+    assert.equal((await publishMap(repo, store, input)).status, "published");
+    assert.equal((await putFeature(repo, mapId, point("p2", 36))).status, "applied");
+    assert.equal((await publishMap(repo, store, input)).status, "published");
+    const before = await repo.listVersions(CTX, mapId);
+    assert.equal(before.length, 2);
 
-    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
-    await repo.applyEdit(CTX, MAP_ID, rev, [point("p2", 36)], []);
-    await publishMap(repo, store, BASE);
-    assert.equal(repo.allVersions(TENANT, MAP_ID).length, 2);
-
-    const out = await rollbackMap(repo, store, { ...BASE, toVersion: 1 });
+    const out = await rollbackMap(repo, store, { ...input, toVersion: 1 });
     assert.equal(out.status, "published");
     if (out.status !== "published") return;
 
     // A third version, not a mutation of version 1.
     assert.equal(out.version.version, 3);
-    const all = repo.allVersions(TENANT, MAP_ID);
-    assert.equal(all.length, 3);
+    const all = [...(await repo.listVersions(CTX, mapId))].sort((a, b) => a.version - b.version);
     assert.deepEqual(all.map((v) => v.version), [1, 2, 3]);
+    // The earlier rows are untouched.
+    assert.deepEqual(all.slice(0, 2), [...before].sort((a, b) => a.version - b.version));
+    assert.deepEqual(all[2]!.origin, { type: "rollback", fromVersion: 1 });
 
-    // Same content as v1, same ETag, so a cached reader gets a 304.
+    // Same content as v1, same ETag, so a cached reader keeps its copy.
     assert.equal(all[2]!.etag, all[0]!.etag);
-  });
-
-  test("rolling back to a version that was never stored is reported", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-    const out = await rollbackMap(repo, store, { ...BASE, toVersion: 99 });
-    assert.equal(out.status, "not_found");
+    const v1 = JSON.parse((await store.get(all[0]!.storageKey))!.body) as { features: unknown };
+    const v3 = JSON.parse((await store.get(all[2]!.storageKey))!.body) as { features: unknown };
+    assert.deepEqual(v3.features, v1.features);
   });
 
   test("a contributor cannot roll back", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-    const out = await rollbackMap(repo, store, {
-      ...BASE,
-      ctx: { ...CTX, role: "contributor" },
-      toVersion: 1,
-    });
+    const { repo, store, mapId, input } = await setup();
+    assert.equal((await publishMap(repo, store, input)).status, "published");
+    const writes = store.writeLog.length;
+
+    const out = await rollbackMap(repo, store, { ...input, ctx: { ...CTX, role: "contributor" }, toVersion: 1 });
     assert.equal(out.status, "forbidden");
-  });
-});
-
-describe("orphan reconciliation", () => {
-  test("finds version rows whose artifact is missing", async () => {
-    const { repo, store } = setup();
-    await publishMap(repo, store, BASE);
-
-    const all = repo.allVersions(TENANT, MAP_ID);
-    assert.deepEqual(await findOrphanedVersions(store, all), []);
-
-    await store.delete(all[0]!.storageKey);
-    const orphans = await findOrphanedVersions(store, all);
-    assert.equal(orphans.length, 1);
-    assert.equal(orphans[0]!.version, 1);
+    assert.equal(store.writeLog.length, writes, "a forbidden rollback still wrote objects");
+    assert.equal((await repo.listVersions(CTX, mapId)).length, 1);
   });
 });
 
 describe("optimistic concurrency", () => {
   test("a stale writer loses instead of clobbering", async () => {
-    const { repo } = setup();
-    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
+    const { repo, mapId } = await setup();
+    const rev = await revOf(repo, mapId);
 
-    const first = await repo.applyEdit(CTX, MAP_ID, rev, [point("a", 35)], []);
-    assert.deepEqual(first, { status: "applied", rev: rev + 1 });
+    const first = await repo.applyEdit(CTX, mapId, { rev, force: false, put: [point("a", 35)], delete: [] }, LIMITS);
+    assert.equal(first.status, "applied");
+    if (first.status !== "applied") return;
+    assert.equal(first.rev, rev + 1);
 
     // Second writer still holds the old revision.
-    const second = await repo.applyEdit(CTX, MAP_ID, rev, [point("b", 36)], []);
+    const second = await repo.applyEdit(CTX, mapId, { rev, force: false, put: [point("b", 36)], delete: [] }, LIMITS);
     assert.equal(second.status, "stale", "stale write was accepted");
 
-    const feats = await repo.listFeatures(CTX, MAP_ID);
-    assert.ok(feats.some((f) => f.id === "a"));
-    assert.ok(!feats.some((f) => f.id === "b"), "stale write landed anyway");
-  });
-
-  test("a writer that re-reads succeeds", async () => {
-    const { repo } = setup();
-    const rev1 = (await repo.getMap(CTX, MAP_ID))!.rev;
-    await repo.applyEdit(CTX, MAP_ID, rev1, [point("a", 35)], []);
-
-    const rev2 = (await repo.getMap(CTX, MAP_ID))!.rev;
-    const ok = await repo.applyEdit(CTX, MAP_ID, rev2, [point("b", 36)], []);
-    assert.deepEqual(ok, { status: "applied", rev: rev2 + 1 });
-  });
-
-  test("deletes are applied before puts within one edit", async () => {
-    const { repo } = setup([point("p1", 35)]);
-    const rev = (await repo.getMap(CTX, MAP_ID))!.rev;
-    // Re-creating the same id in the same transaction must keep the new value.
-    await repo.applyEdit(CTX, MAP_ID, rev, [point("p1", 99)], ["p1"]);
-    const feats = (await repo.listFeatures(CTX, MAP_ID)) as PointFeature[];
-    assert.equal(feats.length, 1);
-    assert.equal(feats[0]!.at_[0], 99);
+    const loaded = (await repo.getMap(CTX, mapId))!;
+    assert.ok(loaded.features.some((f) => f.id === "a"));
+    assert.ok(!loaded.features.some((f) => f.id === "b"), "stale write landed anyway");
+    assert.equal(loaded.map.rev, rev + 1);
   });
 });

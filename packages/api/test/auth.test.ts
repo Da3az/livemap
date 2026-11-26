@@ -44,13 +44,14 @@ test("tampering with the claims invalidates the signature", () => {
 });
 
 test("an expired token is rejected even though the signature is valid", () => {
-  const token = signSession(
-    claims({ exp: Math.floor(Date.now() / 1000) - 1 }),
-    SECRET,
-  );
+  const expired = claims({ exp: Math.floor(Date.now() / 1000) - 1 });
+  const token = signSession(expired, SECRET);
+  // The claims come back with the refusal so the caller can say whose session
+  // ran out (a guest workspace or a member); the result is still not ok.
   assert.deepEqual(verifySession(token, SECRET), {
     ok: false,
     reason: "expired",
+    claims: expired,
   });
 });
 
@@ -88,7 +89,8 @@ test("TokenAuth refuses to start on a placeholder secret", () => {
 
 test("TokenAuth resolves an actor from a Bearer header", async () => {
   const auth = new TokenAuth(SECRET);
-  const token = signSession(claims(), SECRET);
+  const c = claims();
+  const token = signSession(c, SECRET);
   const actor = await auth.resolve({
     headers: { authorization: `Bearer ${token}` },
   } as unknown as FastifyRequest);
@@ -98,6 +100,7 @@ test("TokenAuth resolves an actor from a Bearer header", async () => {
     tenantId: "t1",
     tenantSlug: "alpha",
     role: "editor",
+    expiresAt: c.exp,
   });
 });
 

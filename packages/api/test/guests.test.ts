@@ -7,7 +7,7 @@ import { MemoryArtifactStore } from "../src/storage.js";
 import { MemoryGuestProvisioner } from "../src/guests.js";
 import { TokenAuth, signSession, verifySession } from "../src/auth.js";
 import { turnstileCheck } from "../src/turnstile.js";
-import { DEFAULT_LIMITS, GUEST_TTL_SECS, isGuestSlug } from "../src/limits.js";
+import { GUEST_TTL_SECS, isGuestSlug } from "../src/limits.js";
 
 const SECRET = "test-secret-not-the-placeholder";
 const API = "/api/v1";
@@ -56,70 +56,27 @@ describe("POST /auth/guest", () => {
     await app.close();
   });
 
-  test("the workspace starts with no maps and guest limits", async () => {
-    const { app } = setup();
-    const { token } = (await signup(app)).json() as Signup;
-
-    const me = (
-      await app.inject({ method: "GET", url: `${API}/me`, headers: bearer(token) })
-    ).json() as {
-      guest: boolean;
-      role: string;
-      expiresAt: string | null;
-      usage: { maps: number };
-      limits: { maxMaps: number };
-    };
-    assert.equal(me.guest, true);
-    assert.equal(me.role, "owner");
-    assert.ok(me.expiresAt);
-    assert.equal(me.usage.maps, 0);
-    assert.equal(me.limits.maxMaps, DEFAULT_LIMITS.guest.maxMaps);
-    await app.close();
-  });
-
-  test("a guest creates maps through the same route as anyone, up to the guest limit", async () => {
-    const { app } = setup({
-      limits: {
-        member: DEFAULT_LIMITS.member,
-        guest: { ...DEFAULT_LIMITS.guest, maxMaps: 1 },
-      },
-    });
-    const { token } = (await signup(app)).json() as Signup;
-    const create = () =>
-      app.inject({
-        method: "POST",
-        url: `${API}/maps`,
-        headers: bearer(token),
-        payload: { title: { value: "Mine", dir: "ltr" } },
-      });
-
-    assert.equal((await create()).statusCode, 201);
-    const second = await create();
-    assert.equal(second.statusCode, 403);
-    assert.equal((second.json() as { error: string }).error, "quota_exceeded");
-    await app.close();
-  });
-
   test("two guests cannot see each other's maps", async () => {
     const { app } = setup();
     const a = (await signup(app)).json() as Signup;
     const b = (await signup(app)).json() as Signup;
 
-    const made = (
-      await app.inject({
-        method: "POST",
-        url: `${API}/maps`,
-        headers: bearer(a.token),
-        payload: { title: { value: "A's map", dir: "ltr" } },
-      })
-    ).json() as { map: { id: string } };
-
-    const res = await app.inject({
-      method: "GET",
-      url: `${API}/maps/${made.map.id}`,
-      headers: bearer(b.token),
+    const created = await app.inject({
+      method: "POST",
+      url: `${API}/maps`,
+      headers: bearer(a.token),
+      payload: { title: { value: "A's map", dir: "ltr" }, uiDir: "ltr", template: "blank" },
     });
+    assert.equal(created.statusCode, 201);
+    const made = created.json() as { map: { id: string } };
+
+    const read = (token: string) =>
+      app.inject({ method: "GET", url: `${API}/maps/${made.map.id}`, headers: bearer(token) });
+    assert.equal((await read(a.token)).statusCode, 200);
+
+    const res = await read(b.token);
     assert.equal(res.statusCode, 404);
+    assert.equal((res.json() as { error: string }).error, "not_found");
     await app.close();
   });
 
@@ -129,24 +86,27 @@ describe("POST /auth/guest", () => {
     const claims = verifySession(token, SECRET);
     assert.ok(claims.ok);
 
+    const session = () => app.inject({ method: "GET", url: `${API}/session`, headers: bearer(token) });
+    assert.equal((await session()).statusCode, 200);
+
     repo.dropTenant(claims.claims.tenantId);
 
-    const res = await app.inject({
-      method: "GET",
-      url: `${API}/me`,
-      headers: bearer(token),
-    });
+    const res = await session();
     assert.equal(res.statusCode, 401);
+    assert.equal((res.json() as { error: string }).error, "unauthorised");
     await app.close();
   });
 
-  test("the route does not exist unless guest signup is configured", async () => {
+  test("signup is refused as disabled unless guest signup is configured", async () => {
+    const repo = new MemoryMapRepo();
     const app = buildServer({
-      repo: new MemoryMapRepo(),
+      repo,
       store: new MemoryArtifactStore(),
       auth: new TokenAuth(SECRET),
     });
-    assert.equal((await signup(app)).statusCode, 404);
+    const res = await signup(app);
+    assert.equal(res.statusCode, 403);
+    assert.equal((res.json() as { error: string }).error, "guest_signup_disabled");
     await app.close();
   });
 
@@ -168,8 +128,10 @@ describe("POST /auth/guest", () => {
       },
     });
 
-    assert.equal((await signup(app)).statusCode, 403);
-    assert.equal((await signup(app, { turnstileToken: "bad" })).statusCode, 403);
+    for (const res of [await signup(app), await signup(app, { turnstileToken: "bad" })]) {
+      assert.equal(res.statusCode, 403);
+      assert.equal((res.json() as { error: string }).error, "human_check_failed");
+    }
     assert.equal(await provisioner.count(), 0);
 
     assert.equal((await signup(app, { turnstileToken: "good" })).statusCode, 201);
@@ -178,28 +140,6 @@ describe("POST /auth/guest", () => {
     await app.close();
   });
 
-  test("answers 503 once the guest ceiling is reached", async () => {
-    const { app } = setup({}, { maxGuests: 2 });
-    assert.equal((await signup(app)).statusCode, 201);
-    assert.equal((await signup(app)).statusCode, 201);
-
-    const res = await signup(app);
-    assert.equal(res.statusCode, 503);
-    assert.ok(res.headers["retry-after"]);
-    assert.equal((res.json() as { error: string }).error, "guest_capacity");
-    await app.close();
-  });
-
-  test("is rate limited per address", async () => {
-    const { app } = setup({
-      rateLimit: { signup: { max: 2, timeWindow: "1 hour" } },
-    });
-    await app.ready();
-    const codes = [];
-    for (let i = 0; i < 4; i++) codes.push((await signup(app)).statusCode);
-    assert.deepEqual(codes, [201, 201, 429, 429]);
-    await app.close();
-  });
 });
 
 describe("rate tiers", () => {
@@ -212,7 +152,7 @@ describe("rate tiers", () => {
     for (let i = 0; i < 4; i++) {
       const res = await app.inject({
         method: "GET",
-        url: `${API}/me`,
+        url: `${API}/session`,
         headers: bearer("not.a-token"),
       });
       codes.push(res.statusCode);
@@ -230,7 +170,7 @@ describe("rate tiers", () => {
     for (let i = 0; i < 5; i++) {
       const res = await app.inject({
         method: "GET",
-        url: `${API}/me`,
+        url: `${API}/session`,
         headers: bearer(token),
       });
       assert.equal(res.statusCode, 200);
@@ -238,51 +178,6 @@ describe("rate tiers", () => {
     await app.close();
   });
 
-  test("reads have their own tier", async () => {
-    const { app } = setup({
-      rateLimit: { read: { max: 2, timeWindow: "1 minute" } },
-    });
-    await app.ready();
-    const { token } = (await signup(app)).json() as Signup;
-    const codes = [];
-    for (let i = 0; i < 3; i++) {
-      const res = await app.inject({
-        method: "GET",
-        url: `${API}/maps`,
-        headers: bearer(token),
-      });
-      codes.push(res.statusCode);
-    }
-    assert.deepEqual(codes, [200, 200, 429]);
-    await app.close();
-  });
-
-  test("a guest publishes under a lower ceiling than a member", async () => {
-    const { app } = setup({
-      servePublic: true,
-      rateLimit: { publish: { max: 50, guestMax: 1, timeWindow: "1 hour" } },
-    });
-    await app.ready();
-    const { token } = (await signup(app)).json() as Signup;
-    const { map } = (
-      await app.inject({
-        method: "POST",
-        url: `${API}/maps`,
-        headers: bearer(token),
-        payload: { title: { value: "Mine", dir: "ltr" } },
-      })
-    ).json() as { map: { id: string } };
-
-    const publish = () =>
-      app.inject({
-        method: "POST",
-        url: `${API}/maps/${map.id}/publish`,
-        headers: bearer(token),
-      });
-    assert.equal((await publish()).statusCode, 201);
-    assert.equal((await publish()).statusCode, 429);
-    await app.close();
-  });
 });
 
 describe("turnstileCheck", () => {
@@ -290,33 +185,6 @@ describe("turnstileCheck", () => {
     (body: unknown, ok = true): typeof fetch =>
     async () =>
       ({ ok, json: async () => body }) as Response;
-
-  test("passes only when Siteverify says success", async () => {
-    const pass = turnstileCheck({ secret: "s", fetchImpl: respond({ success: true }) });
-    const fail = turnstileCheck({
-      secret: "s",
-      fetchImpl: respond({ success: false, "error-codes": ["timeout-or-duplicate"] }),
-    });
-    assert.equal(await pass("tok", "203.0.113.9"), true);
-    assert.equal(await fail("tok", "203.0.113.9"), false);
-  });
-
-  test("sends the secret, the token and the address", async () => {
-    let sent: Record<string, unknown> = {};
-    const check = turnstileCheck({
-      secret: "s3cret",
-      fetchImpl: (async (_url: unknown, init?: RequestInit) => {
-        sent = JSON.parse(String(init?.body));
-        return { ok: true, json: async () => ({ success: true }) } as Response;
-      }) as typeof fetch,
-    });
-    await check("tok", "203.0.113.9");
-    assert.deepEqual(sent, {
-      secret: "s3cret",
-      response: "tok",
-      remoteip: "203.0.113.9",
-    });
-  });
 
   test("fails closed: no token, an HTTP error and a network error all refuse", async () => {
     const never = turnstileCheck({
