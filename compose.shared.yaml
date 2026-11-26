@@ -67,7 +67,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.11.2
     restart: unless-stopped
-    command: ['tunnel', '--no-autoupdate', 'run']
+    # http2, not QUIC: outbound UDP to Cloudflare's edge times out from the
+    # box, while TCP works.
+    command: ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run']
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?}
     depends_on: [server]
