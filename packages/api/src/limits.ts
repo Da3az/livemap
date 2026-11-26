@@ -16,7 +16,7 @@ export function isGuestSlug(slug: string): boolean {
 }
 
 export interface TenantLimits {
-  /** Archived maps count: archiving must not be a way to mint more. */
+  /** Maps that are not archived. Restoring one is refused while the workspace is at this limit. */
   readonly maxMaps: number;
   readonly maxFeaturesPerMap: number;
   /** Each version is an object in the bucket that is never deleted. Null = unbounded. */

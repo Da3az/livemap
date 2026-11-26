@@ -256,7 +256,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const status = err.statusCode ?? 500;
     if (status >= 500) {
       req.log?.error({ err, reqId: req.id }, "request failed");
-      return refuse(reply, 500, "internal_error", "The server failed while handling this request.");
+      return refuse(reply, 500, "internal_error", "The server failed while handling this request.", { reqId: req.id });
     }
     if (err.validation) {
       // The message names the offending field and nothing else; it is built
@@ -923,9 +923,10 @@ function refuse(
   status: number,
   error: ApiErrorCode,
   reason: string,
-  extra: { readonly retryAfter?: number; readonly current?: ErrorBody["current"] } = {},
+  extra: { readonly retryAfter?: number; readonly current?: ErrorBody["current"]; readonly reqId?: string } = {},
 ) {
   const body: ErrorBody = { error, reason };
+  if (extra.reqId !== undefined) body.reqId = extra.reqId;
   if (extra.retryAfter !== undefined) {
     reply.header("retry-after", extra.retryAfter);
     body.retryAfter = extra.retryAfter;

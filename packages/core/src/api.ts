@@ -43,6 +43,8 @@ export interface ErrorBody {
   reason?: string;
   retryAfter?: number;
   current?: CurrentRevision;
+  /** On a 500 only: the id the server logged the failure under, so it can be found again. */
+  reqId?: string;
 }
 
 /** Changes to a keyed list: whole items put (added or replaced) by id, and ids deleted. */
