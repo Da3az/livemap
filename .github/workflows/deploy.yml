@@ -1,0 +1,59 @@
+# Deploy on every push to main.
+#
+#   CI (ci.yml) -> build livemap-server image -> ssh to the box
+#
+# This repo is public: the deploy secrets live in the `production` environment,
+# which only the `main` branch may use. Fork pull requests never receive them.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: SSH setup (pinned host key)
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<CFG
+          Host box
+            HostName ${{ secrets.DEPLOY_HOST }}
+            User deploy
+            IdentityFile ~/.ssh/deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+          CFG
+
+      - name: Build image
+        run: docker build -t livemap-server:${{ github.sha }} .
+
+      - name: Upload compose file
+        run: ssh box compose < compose.shared.yaml
+
+      - name: Load image on the box
+        run: docker save livemap-server:${{ github.sha }} | ssh box load
+
+      - name: Migrate and deploy
+        run: ssh box deploy ${{ github.sha }}
